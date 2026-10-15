@@ -20,6 +20,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(__ANDROID__)
+#include <SDL.h>
+#endif
+
 namespace cane
 {
 namespace fs = std::filesystem;
@@ -38,9 +42,26 @@ inline fs::path PathFromUtf8(const std::string& value)
     return fs::path(std::u8string(value.begin(), value.end()));
 }
 
+#if defined(__ANDROID__)
+// Game data (the extracted Worlds/ and Cutscenes/ folders) and saves live in
+// the app-specific external directory, /sdcard/Android/data/<package>/files.
+// It is writable without storage permissions and reachable over USB/MTP and
+// from any file manager's "Android/data" view on a PC.
+inline fs::path AndroidFilesDirectory()
+{
+    if (const char* path = SDL_AndroidGetExternalStoragePath(); path != nullptr && *path != '\0')
+        return fs::path(path);
+    if (const char* path = SDL_AndroidGetInternalStoragePath(); path != nullptr && *path != '\0')
+        return fs::path(path);
+    return fs::current_path();
+}
+#endif
+
 inline fs::path ExecutableDirectory()
 {
-#ifdef _WIN32
+#if defined(__ANDROID__)
+    return AndroidFilesDirectory();
+#elif defined(_WIN32)
     std::wstring path(32768, L'\0');
     const DWORD length = GetModuleFileNameW(nullptr, path.data(),
         static_cast<DWORD>(path.size()));
@@ -79,7 +100,7 @@ inline fs::path UserDirectory()
     if (!g_userOverride.empty())
         return g_userOverride;
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
     return ExecutableDirectory();
 #else
     // ExecutableDirectory() is read-only for AppImages. Follow the XDG base

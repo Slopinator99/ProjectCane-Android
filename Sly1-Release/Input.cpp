@@ -12,6 +12,11 @@ float g_controllerDeadzone = 0.35f;
 #include "mb.h"
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
+#ifdef __ANDROID__
+// On-screen controller (platform/android/touch_overlay.h): fills `state` and returns 1 while it is active.
+extern "C" int cane_touch_pad_state(GLFWgamepadstate* state);
+constexpr int TOUCH_JOYSTICK_ID = -2;   // SDL instance ids are >= 0 and JOYID_Nil is -1
+#endif
 #include <cstdio>
 #include <iterator>
 #include <vector>
@@ -329,6 +334,37 @@ SDL_GameController* PcontrollerFromInstanceId(int instanceId)
     return it != s_sdlControllers.end() ? it->controller : nullptr;
 }
 
+#ifdef __ANDROID__
+// Handhelds and phones: the on-screen controller and built-in pads that expose no rumble motor shake the device's own
+// vibrator instead (SDL's haptic API maps it to the Android Vibrator).
+void SetDeviceVibration(uint8_t highSpeedMotor, uint8_t lowSpeedMotor)
+{
+    static SDL_Haptic* s_haptic = nullptr;
+    static bool s_tried = false;
+    if (!s_tried)
+    {
+        s_tried = true;
+        if (SDL_InitSubSystem(SDL_INIT_HAPTIC) == 0 && SDL_NumHaptics() > 0)
+        {
+            s_haptic = SDL_HapticOpen(0);
+            if (s_haptic != nullptr && SDL_HapticRumbleInit(s_haptic) != 0)
+            {
+                SDL_HapticClose(s_haptic);
+                s_haptic = nullptr;
+            }
+        }
+    }
+    if (s_haptic == nullptr)
+        return;
+
+    const float strength = (std::max)(highSpeedMotor != 0 ? 1.0f : 0.0f, lowSpeedMotor / 255.0f);
+    if (strength <= 0.0f)
+        SDL_HapticRumbleStop(s_haptic);
+    else
+        SDL_HapticRumblePlay(s_haptic, strength, 1000);
+}
+#endif
+
 void SetSdlRumble(const JOY* pjoy, uint8_t highSpeedMotor, uint8_t lowSpeedMotor)
 {
     if (pjoy == nullptr || !pjoy->gamepadConnected)
@@ -336,7 +372,12 @@ void SetSdlRumble(const JOY* pjoy, uint8_t highSpeedMotor, uint8_t lowSpeedMotor
 
     SDL_GameController* controller = PcontrollerFromInstanceId(pjoy->joystickId);
     if (controller == nullptr || SDL_GameControllerHasRumble(controller) != SDL_TRUE)
+    {
+#ifdef __ANDROID__
+        SetDeviceVibration(highSpeedMotor, lowSpeedMotor);
+#endif
         return;
+    }
 
     const Uint16 lowFrequency = static_cast<Uint16>(lowSpeedMotor * 257U);
     const Uint16 highFrequency = highSpeedMotor != 0 ? static_cast<Uint16>(0xFFFF) : 0;
@@ -560,6 +601,12 @@ void JOY::Update(GLFWwindow* window)
             current[static_cast<JOY_BUTTON>(button)] = glfwGetKey(window, key) == GLFW_PRESS;
     }
 
+#ifdef __ANDROID__
+    // The Android Back button acts as Start: it opens and closes the pause menu.
+    if (glfwGetKey(window, CANE_KEY_ANDROID_BACK) == GLFW_PRESS)
+        current[BTN_START] = true;
+#endif
+
     float xRaw = 0.0f;
     float yRaw = 0.0f;
     float x2Raw = 0.0f;
@@ -597,6 +644,25 @@ void JOY::Update(GLFWwindow* window)
         }
     }
 
+#ifdef __ANDROID__
+    {
+        // The on-screen controller wins while a finger is on it and is otherwise only used when no real controller
+        // is connected, so a real pad takes over again as soon as it is touched.
+        GLFWgamepadstate touch{};
+        if (cane_touch_pad_state(&touch) != 0)
+        {
+            const float activity = GamepadActivity(touch);
+            if (!haveGamepadState || activity > 0.05f)
+            {
+                state = touch;
+                activeJoystickId = TOUCH_JOYSTICK_ID;
+                bestActivity = activity + 10.0f;
+                haveGamepadState = true;
+            }
+        }
+    }
+#endif
+
     if (haveGamepadState)
     {
         if (!gamepadConnected || activeJoystickId != joystickId)
@@ -611,7 +677,14 @@ void JOY::Update(GLFWwindow* window)
         hasGamepadState = true;
         for (int button = 0; button < BTN_MAX; ++button)
         {
+#ifdef __ANDROID__
+            // The on-screen controller always sends the canonical layout; remaps made for a physical pad must not
+            // scramble it.
+            const int binding = activeJoystickId == TOUCH_JOYSTICK_ID
+                ? kDefaultGamepadBindings[button] : g_gamepadBindings[button];
+#else
             const int binding = g_gamepadBindings[button];
+#endif
             bool held = false;
             if (binding >= 0 && binding <= GLFW_GAMEPAD_BUTTON_LAST)
                 held = state.buttons[binding] == GLFW_PRESS;

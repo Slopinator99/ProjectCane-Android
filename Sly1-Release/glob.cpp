@@ -423,15 +423,27 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
 
                 if (expectedPoseDeltaCount > 0)
                 {
-                    glGenBuffers(1, &glob.poseDposSSBO);
-                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.poseDposSSBO);
-                    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(glob.poseDpos.size() * sizeof(glm::vec4)), glob.poseDpos.data(), GL_STATIC_DRAW);
+                    // §8.1 fallback: pose deltas live in data textures instead
+                    // of vertex SSBOs (buffers 10/11 -> units 6/7).
+                    if (g_fVertexUboFallback)
+                    {
+                        glob.poseDposSSBO = CreateFallbackTex(FALLBACKTEX_VEC4,
+                            glob.poseDpos.size(), glob.poseDpos.data());
+                        glob.poseDnormalSSBO = CreateFallbackTex(FALLBACKTEX_VEC4,
+                            glob.poseDnormal.size(), glob.poseDnormal.data());
+                    }
+                    else
+                    {
+                        glGenBuffers(1, &glob.poseDposSSBO);
+                        glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.poseDposSSBO);
+                        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(glob.poseDpos.size() * sizeof(glm::vec4)), glob.poseDpos.data(), GL_STATIC_DRAW);
 
-                    glGenBuffers(1, &glob.poseDnormalSSBO);
-                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.poseDnormalSSBO);
-                    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(glob.poseDnormal.size() * sizeof(glm::vec4)), glob.poseDnormal.data(), GL_STATIC_DRAW);
+                        glGenBuffers(1, &glob.poseDnormalSSBO);
+                        glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.poseDnormalSSBO);
+                        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(glob.poseDnormal.size() * sizeof(glm::vec4)), glob.poseDnormal.data(), GL_STATIC_DRAW);
 
-                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+                        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+                    }
                 }
 
                 if (glob.pwrbg && glob.pwrbg->cmat > 0)
@@ -450,7 +462,12 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
                     // don't allocate state yet here (because WR->cmat isn’t known until ApplyWrGlob)
                     // but you CAN create the SSBO name now:
                     if (w.ssboState == 0)
-                        glGenBuffers(1, &w.ssboState);
+                    {
+                        if (g_fVertexUboFallback)
+                            glGenTextures(1, &w.ssboState); // data texture (buffer 6 -> unit 4)
+                        else
+                            glGenBuffers(1, &w.ssboState);
+                    }
                 }
 
                 if (glob.fThreeWay == 1 && glob.fDynamic == 0)
@@ -509,18 +526,44 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
                 assert(mergedEdgePoints.size() == expectedEdgePointCount);
                 assert(mergedEdgePoseDpos.size() == expectedEdgePoseCount);
 
-                glGenBuffers(1, &glob.edgeSSBO);
-                glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.edgeSSBO);
-                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(mergedEdgePoints.size() * sizeof(CELPOINT)), mergedEdgePoints.data(), GL_STATIC_DRAW);
-
-                if (!mergedEdgePoseDpos.empty())
+                if (g_fVertexUboFallback)
                 {
-                    glGenBuffers(1, &glob.edgePoseDposSSBO);
-                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.edgePoseDposSSBO);
-                    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(mergedEdgePoseDpos.size() * sizeof(glm::vec4)), mergedEdgePoseDpos.data(), GL_STATIC_DRAW);
-                }
+                    // §8.1 fallback: the vertex stage cannot read buffers, so the CELPOINT records are split
+                    // into three data textures (positions -> unit 4, bone indices -> 6, weights -> 7) and the
+                    // pose deltas into one more (unit 8).
+                    std::vector<glm::vec4> edgePositions(mergedEdgePoints.size());
+                    std::vector<glm::uvec4> edgeBoneIndices(mergedEdgePoints.size());
+                    std::vector<glm::vec4> edgeBoneWeights(mergedEdgePoints.size());
+                    for (size_t point = 0; point < mergedEdgePoints.size(); ++point)
+                    {
+                        edgePositions[point] = mergedEdgePoints[point].position;
+                        edgeBoneIndices[point] = mergedEdgePoints[point].boneIndices;
+                        edgeBoneWeights[point] = mergedEdgePoints[point].boneWeights;
+                    }
 
-                glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+                    glob.edgeSSBO = CreateFallbackTex(FALLBACKTEX_VEC4, edgePositions.size(), edgePositions.data());
+                    glob.edgeBoneIndicesSSBO = CreateFallbackTex(FALLBACKTEX_UVEC4, edgeBoneIndices.size(), edgeBoneIndices.data());
+                    glob.edgeBoneWeightsSSBO = CreateFallbackTex(FALLBACKTEX_VEC4, edgeBoneWeights.size(), edgeBoneWeights.data());
+
+                    if (!mergedEdgePoseDpos.empty())
+                        glob.edgePoseDposSSBO = CreateFallbackTex(FALLBACKTEX_VEC4,
+                            mergedEdgePoseDpos.size(), mergedEdgePoseDpos.data());
+                }
+                else
+                {
+                    glGenBuffers(1, &glob.edgeSSBO);
+                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.edgeSSBO);
+                    glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(mergedEdgePoints.size() * sizeof(CELPOINT)), mergedEdgePoints.data(), GL_STATIC_DRAW);
+
+                    if (!mergedEdgePoseDpos.empty())
+                    {
+                        glGenBuffers(1, &glob.edgePoseDposSSBO);
+                        glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.edgePoseDposSSBO);
+                        glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(mergedEdgePoseDpos.size() * sizeof(glm::vec4)), mergedEdgePoseDpos.data(), GL_STATIC_DRAW);
+                    }
+
+                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+                }
 
                 numRoCel++;
             }
@@ -539,6 +582,8 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
             inst.edgeSSBO  = base.edgeSSBO;
             inst.edgeCount = base.edgeCount;
             inst.edgePoseDposSSBO = base.edgePoseDposSSBO;
+            inst.edgeBoneIndicesSSBO = base.edgeBoneIndicesSSBO;
+            inst.edgeBoneWeightsSSBO = base.edgeBoneWeightsSSBO;
 
             inst.poseDposSSBO = base.poseDposSSBO;
             inst.poseDnormalSSBO = base.poseDnormalSSBO;
@@ -626,7 +671,12 @@ void CloneGlob(GLOBSET* pglobset, GLOB* pglob, GLOBI* pglobi)
         w.vertexCount = (int)w.basePos.size();
 
         if (w.ssboState == 0)
-            glGenBuffers(1, &w.ssboState);
+        {
+            if (g_fVertexUboFallback)
+                glGenTextures(1, &w.ssboState); // data texture; reallocated by the warp setup
+            else
+                glGenBuffers(1, &w.ssboState);
+        }
     }
 
     if (pglob->fThreeWay == 1 && pglob->fDynamic == 0 && pglob->pwarpGlob == nullptr)
@@ -777,6 +827,19 @@ void PostGlobsetLoad(GLOBSET* pglobset, ALO* palo)
 
     if (pglobset->boneMatrices.size() != static_cast<size_t>(pglobset->cbnd))
         pglobset->boneMatrices.resize(pglobset->cbnd, glm::mat4(1.0f));
+
+    // §8.1 fallback: bone matrices are a 4-wide RGBA32F data texture
+    // (buffer 9 -> unit 5); textureSize().y gives the shader the exact count.
+    if (g_fVertexUboFallback)
+    {
+        if (pglobset->boneMatrixSSBO == 0)
+            pglobset->boneMatrixSSBO = CreateFallbackTex(FALLBACKTEX_MAT4,
+                pglobset->boneMatrices.size(), pglobset->boneMatrices.data());
+        else
+            UpdateFallbackTex(pglobset->boneMatrixSSBO, FALLBACKTEX_MAT4,
+                pglobset->boneMatrices.size(), pglobset->boneMatrices.data());
+        return;
+    }
 
     if (pglobset->boneMatrixSSBO == 0)
         glGenBuffers(1, &pglobset->boneMatrixSSBO);

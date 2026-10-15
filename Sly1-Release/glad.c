@@ -2220,10 +2220,12 @@ static void find_coreGL(void) {
     version = (const char*) glGetString(GL_VERSION);
     if (!version) return;
 
+    int isEs = 0;
     for (i = 0;  prefixes[i];  i++) {
         const size_t length = strlen(prefixes[i]);
         if (strncmp(version, prefixes[i], length) == 0) {
             version += length;
+            isEs = 1;
             break;
         }
     }
@@ -2234,6 +2236,19 @@ static void find_coreGL(void) {
 #else
     sscanf(version, "%d.%d", &major, &minor);
 #endif
+
+    /* OpenGL ES context: this loader was generated against desktop GL 4.3, so
+       it gates each function bucket on the parsed desktop version. ES 3.2
+       reports "3.2", which would skip the 3.3/4.x buckets even though ES 3.2
+       provides most of those entry points (glVertexAttribDivisor,
+       glDrawElementsBaseVertex, glTexStorage2D, glMemoryBarrier, ...) and the
+       game calls them. Load every bucket and let symbols that ES truly lacks
+       resolve to NULL; the game's desktop-only calls are redirected to ES
+       shims by platform/gles_compat.h before they reach glad. */
+    if (isEs && major == 3 && minor >= 1) {
+        major = 4;
+        minor = 3;
+    }
 
     GLVersion.major = major; GLVersion.minor = minor;
     max_loaded_major = major; max_loaded_minor = minor;

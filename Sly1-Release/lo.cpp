@@ -1,4 +1,7 @@
 #include "lo.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#endif
 #include "alo.h"
 #include "game.h"
 #include "spliceobj.h"
@@ -494,7 +497,14 @@ void PostSpliceEventCallback(LO* plo, SYMID symidEvent, void* pvarg)
 		ppairArg = ppairArg->m_ppairNext.get();
 	}
 
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	const CRef refResult = RefEvalLambdaBody(pproc->m_ppairCodeExpr, pframeCall.get());
+	if (refResult.m_tagk == TAGK_Err)
+		__android_log_print(ANDROID_LOG_WARN, "cane", "[Splice] callback ended in error: oid=%d symid=%d plo=%p",
+			(int)plo->oid, (int)symidEvent, (void*)plo);
+#else
 	RefEvalLambdaBody(pproc->m_ppairCodeExpr, pframeCall.get());
+#endif
 }
 
 void EnsureLoSidebagBool(LO* plo, OPTID optid, int f)

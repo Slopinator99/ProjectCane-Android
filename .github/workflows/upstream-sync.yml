@@ -1,0 +1,56 @@
+name: Upstream sync
+
+# Weekly: merge theclub654/ProjectCane master into this fork's integration
+# branch, run the portability checks, and open a PR (or an issue if it conflicts).
+on:
+  schedule: [{ cron: '17 5 * * 1' }]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  UPSTREAM: https://github.com/theclub654/ProjectCane.git
+  UPSTREAM_BRANCH: master
+  BASE_BRANCH: android          # the branch that carries the port
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.BASE_BRANCH }}', fetch-depth: 0 }
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name  "upstream-sync"
+          git config user.email "upstream-sync@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch upstream "$UPSTREAM_BRANCH"
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "status=uptodate" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git checkout -b "sync/upstream-$(date +%Y%m%d)"
+          if git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+          git log --oneline HEAD..upstream/$UPSTREAM_BRANCH | head -30 > /tmp/upstream-log.txt || true
+      - name: Push + open PR (CI runs on the PR)
+        if: steps.merge.outputs.status == 'clean'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          b="$(git branch --show-current)"
+          git push origin "$b"
+          gh pr create --base "$BASE_BRANCH" --head "$b" \
+            --title "Merge upstream $(date +%F)" \
+            --body "Automatic merge of \`$UPSTREAM_BRANCH\` from upstream. The Android workflow (shader, AArch64 and APK build) runs on this PR: if it fails, upstream added something that needs a port fix (see PORTING.md → Updating from upstream)."
+      - name: Open issue on conflict
+        if: steps.merge.outputs.status == 'conflict'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh issue create --title "Upstream merge conflict ($(date +%F))" \
+            --body "Merging upstream/$UPSTREAM_BRANCH into $BASE_BRANCH conflicts. Resolve locally: \`git fetch upstream && git merge upstream/$UPSTREAM_BRANCH\`. Files the port touches are listed in PORTING.md."

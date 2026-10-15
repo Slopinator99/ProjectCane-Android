@@ -1,156 +1,136 @@
 <p align="center">
-  <img alt="ProjectCane" src="README-assets/projectcane-logo.png" />
+  <img alt="ProjectCane" src="README-assets/projectcane-logo.png" height="130" />
+  &nbsp;&nbsp;&nbsp;
+  <img alt="Android" src="README-assets/android-logo.png" height="130" />
 </p>
 
-# ProjectCane
+# ProjectCane Android
 
-ProjectCane is a native PC port of the NTSC release of *Sly Cooper and the
-Thievius Raccoonus*. It began as a map viewer and has grown into a complete,
-playable port for Windows and Linux.
+An Android port of [ProjectCane](https://github.com/theclub654/ProjectCane), the native
+PC port of the NTSC release of *Sly Cooper and the Thievius Raccoonus*.
+
+This fork is based on upstream **0.4.1** and adds everything needed to run the game on
+ARM64 Android phones and handhelds: an OpenGL ES 3.2 renderer path, SDL2-based window,
+audio and input, an on-screen controller, and an importer that extracts the game data
+from your own ISO directly on the device.
 
 > [!IMPORTANT]
-> ProjectCane does not include the original game's copyrighted data. You must
-> provide a legally obtained NTSC copy of the game and extract its data with
-> the included File Extractor GUI.
+> This project does not include any of the original game's copyrighted data. You must
+> provide your own legally obtained NTSC-U copy of the game (SCUS-97198) as an `.iso`.
 
-## Download
+> [!NOTE]
+> The Android port was developed with AI assistance (Claude, driven by the repository
+> owner). The underlying game port is the work of the upstream ProjectCane authors.
 
-Prebuilt Windows and Linux packages are available from the
-[GitHub Releases page](https://github.com/theclub654/ProjectCane/releases).
+## Devices this was tested on
 
-The Linux release is distributed as a portable x86-64 AppImage and is built
-against Ubuntu 22.04 / glibc 2.35 for compatibility with SteamOS and other
-modern Linux distributions.
+| Device | Processor | GPU |
+| --- | --- | --- |
+| AYN Thor | Qualcomm Snapdragon 8 Gen 2 | Adreno 740 |
+| RG557 | MediaTek | Mali-G615 |
+| POCO F6 Pro (earlier build) | Qualcomm Snapdragon 8 Gen 2 | Adreno 740 |
 
-## Installation
+The game is fully playable on these. Anything in the same processor families (Snapdragon /
+Adreno, MediaTek / Mali) should normally work too. It has **not** been tested on Samsung
+Exynos processors.
 
-### Windows
+The minimum is Android 10, ARM64 and a GPU exposing OpenGL ES 3.2 with enough vertex-stage
+buffer bindings; the game shows a clear error at start-up if the GPU does not qualify.
+Prebuilt APKs are not published yet; build from source (see
+[Building](#building-the-android-app)).
 
-1. Download and extract the Windows release into a normal writable folder.
-2. Run the included **File Extractor GUI**.
-3. Select your legally obtained NTSC ISO.
-4. Choose the same folder that contains ProjectCane as the installation
-   destination.
-5. Wait for extraction to finish, then launch
-   `Sly Cooper and the Thievius Raccoonus.exe`.
+## Features
 
-The extractor creates the required `Worlds` and `Cutscenes` directories.
-Keep these directories beside the game executable.
+- **Single universal APK.** The GPU is detected at start-up and the renderer picks the
+  right path (Adreno, Mali, or the generic one).
+- **On-device data import.** Pick your ISO and the app extracts and rebuilds the level
+  data itself (about two minutes, about 4 GB free space needed). You can also copy a
+  folder that was already extracted on a PC.
+- **Controller support** through SDL: Bluetooth or USB pads, built-in handheld controls,
+  rumble (the device vibrator is used when the pad has no motor of its own).
+- **On-screen controller** in a PlayStation-style layout with an editor for moving and
+  resizing every control, plus opacity and size settings. It hides itself when a physical
+  pad is used.
+- **Back button = Start** (opens and closes the pause menu).
+- **Save backup and restore** from the Options menu: saves are exported as a ZIP to any
+  location you pick in the system file picker, and restored from one the same way.
+- Menus trimmed to options that make sense on Android.
 
-### Linux and Steam Deck
+## Installing
 
-1. Download and extract the complete Linux package into a normal writable
-   folder. Do not run it from inside the archive.
-2. Open a terminal in that folder. Steam Deck users can use **Konsole** in
-   Desktop Mode.
-3. Start the extractor:
+1. Install the APK (`adb install ProjectCane-release-signed.apk`, or open it on the device).
+2. Copy your NTSC-U ISO to the device (for example into the Download folder).
+3. Open ProjectCane, choose **Select PS2 ISO and extract**, and pick the ISO. Wait for the
+   import to finish; the game starts by itself.
 
-   ```bash
-   bash "Run File Extractor.sh"
-   ```
+If you previously extracted the data on a PC, choose **Or: copy a folder already extracted
+on a PC** and select the folder that contains `Worlds` and `Cutscenes`.
 
-4. Select your NTSC ISO and extract the game data into the same folder as
-   `ProjectCane-x86_64.AppImage`.
-5. Start the game:
+Game data and saves live in `Android/data/org.projectcane.cane/files/` (reachable over USB).
+Data imported by an older ProjectCane Android version is detected and re-imported once,
+because upstream 0.4.x needs levels in a new format.
 
-   ```bash
-   bash "Run ProjectCane.sh"
-   ```
+## Controls
 
-The launch scripts automatically set the required executable permissions.
-The AppImage includes the non-system runtime libraries needed by ProjectCane;
-graphics drivers and normal operating-system libraries are supplied by the
-host system.
+| Input | Action |
+| --- | --- |
+| Pad / on-screen buttons | Standard PlayStation layout (X jump, Square attack, and so on) |
+| Back button | Start / pause menu |
+| Options > Controls | Touch mode, opacity, size, **Edit Touch Layout**, button remapping for physical pads |
 
-## Save Data and Settings
+The on-screen controller always uses the default layout; remapping only affects physical pads.
 
-On Windows, writable game data is stored beside the executable, including the
-`Saves` directory.
+## Building the Android app
 
-On Linux, they are stored in:
+Requirements: JDK 17 or newer, Android SDK platform 34, NDK r26 (26.3.11579264), CMake 3.22.1.
 
-```text
-~/.local/share/ProjectCane
+```bash
+cd android
+./scripts/setup-android.sh                 # clones SDL2 into android/third_party
+../scripts/ci/build-ffmpeg-android.sh      # cross-builds the decode-only FFmpeg into android/third_party/ffmpeg
+./gradlew :app:assembleDebug               # or :app:assembleRelease
 ```
 
-If `XDG_DATA_HOME` is configured, ProjectCane uses
-`$XDG_DATA_HOME/ProjectCane` instead.
+Point Gradle at your SDK with `android/local.properties` (`sdk.dir=...`). Release builds are
+unsigned unless you provide a keystore; see `android/app/build.gradle` and `.github/workflows`.
+
+Technical notes (renderer fallbacks, the Adreno fix, the data pipeline, how upstream merges
+are done) are in [`PORTING.md`](PORTING.md). Android-specific layout is described in
+[`android/README.md`](android/README.md).
+
+## Keeping up with upstream
+
+This repository tracks `theclub654/ProjectCane`. Upstream changes are merged into the port
+and re-tested on device; `PORTING.md` lists what usually needs attention (shader and buffer
+layout changes, the data/extraction format, new window or input calls).
 
 ## Troubleshooting
 
-Make sure the extracted `Worlds` and `Cutscenes` directories are beside the
-game executable or AppImage.
+- **"Game data not found" after an update:** data from an older version needs re-importing once.
+- **Reporting a problem:** open the in-game pause menu > Options > **Backup / Restore Saves**, press
+  **Save debug log to a file**, and attach the zip to your issue. It contains device details, the game
+  settings and the logs of the last launches (never your saves or game data). The same logs are in
+  `Android/data/org.projectcane.cane/files/Logs/`. With a PC you can also use
+  `adb logcat -s cane SDL AndroidRuntime DEBUG`.
+- **Import fails:** check free space (about 4 GB) and that the file is the NTSC-U ISO.
 
-To capture a Linux startup log, run:
+## Credits
 
-```bash
-./ProjectCane-x86_64.AppImage 2>&1 | tee projectcane_startup.log
-```
-
-When reporting a problem, include the log, your operating system, GPU, CPU,
-audio device, and the steps needed to reproduce the issue.
-
-## Building from Source
-
-### Windows with Visual Studio
-
-Requirements:
-
-- Visual Studio 2022
-- **Desktop development with C++** workload
-- .NET 9 SDK for the File Extractor GUI
-
-Open `ProjectCane.sln`, select the `Release` and `x64` configuration, and
-build the `Sly1-Release` project. The shaders are embedded into the executable
-at build time, so external shader files are not required.
-
-The cross-platform extractor is the `File Extractor GUI` project in the same
-solution.
-
-### Windows with CMake
-
-```powershell
-cmake --preset windows-release
-cmake --build --preset windows-release
-```
-
-### Linux development build
-
-The Linux build requires CMake 3.22 or newer, Ninja, a C++20 compiler,
-PkgConfig, and FFmpeg development packages providing `libavformat`,
-`libavcodec`, `libavutil`, and `libswscale`.
-
-```bash
-cmake --preset linux-release
-cmake --build --preset linux-release
-```
-
-The executable is written to `build/linux-release/bin/ProjectCane`.
-
-### Portable Linux AppImage
-
-Distribution builds must use the Ubuntu 22.04 / glibc 2.35 baseline. Detailed
-Docker and packaging instructions are available in
-[`packaging/linux/README.md`](packaging/linux/README.md).
-
-## Project Status
-
-The full game is playable. Development continues to focus on accuracy,
-performance, controller support, platform compatibility, and remaining
-differences from the original PlayStation 2 release.
-
-## Help Bring Sly 2 and Sly 3 to PC
-
-ProjectCane is not intended to stop with *Sly Cooper and the Thievius
-Raccoonus*. The long-term goal is to bring *Sly 2: Band of Thieves* and
-*Sly 3: Honor Among Thieves* to PC as native ports as well.
-
-If you know where to find a debug build of *Sly 2* or *Sly 3* containing debug
-symbols, please contact [projectcane182@gmail.com](mailto:projectcane182@gmail.com).
+- **ProjectCane** by [theclub654](https://github.com/theclub654) and contributors: the game port
+  this is built on.
+- **SDL2**, **FFmpeg** and **FAudio**, used under their own licenses.
+- The Android robot in the header is reproduced from work created and shared by Google and used
+  according to the terms of the
+  [Creative Commons 3.0 Attribution License](https://creativecommons.org/licenses/by/3.0/).
+  Android is a trademark of Google LLC.
 
 ## Legal
 
-ProjectCane is an unofficial fan project and is not affiliated with or
-endorsed by Sony Interactive Entertainment or Sucker Punch Productions.
-*Sly Cooper* and related names and assets belong to their respective owners.
-No original game data is distributed with this repository or its releases.
+ProjectCane is an unofficial fan project and is not affiliated with or endorsed by Sony
+Interactive Entertainment or Sucker Punch Productions. *Sly Cooper* and related names and
+assets belong to their respective owners. No original game data is distributed with this
+repository or its releases.
+
+This repository does not currently contain a license file, like the upstream project it is
+based on; the code is shared for preservation and learning, and rights to the original game
+remain with their owners.

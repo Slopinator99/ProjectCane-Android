@@ -8,6 +8,34 @@
 #include <vector>
 #include "sqtr.h"
 
+// ---------------------------------------------------------------------
+// §8.1 vertex-SSBO fallback (Mali-class GPUs report
+// GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = 0, so glob.vert/celborder.vert/
+// dysh.vert cannot link). When g_fVertexUboFallback is set (gl.cpp gate),
+// shaders are compiled with CANE_VERTEX_UBO_FALLBACK (injected by
+// glshaders.cpp): read-only blocks move to std140 uniform blocks, per-mesh
+// arrays move to RGBA32F/RGBA32UI data textures, and the writable
+// CACHEDLIGHTING block is replaced by a per-draw recompute. The desktop
+// path is unchanged (the flag is only set under CANE_GLES).
+// ---------------------------------------------------------------------
+extern bool g_fVertexUboFallback;
+extern bool g_fBakePrepass;   // Adreno only: run the lighting bakes before the scene draws
+
+// Data-texture element layouts for the fallback path. MAT4 packs 4 texels
+// per matrix in a 4-wide texture so textureSize().y is the exact matrix
+// count; VEC4/UVEC4 use one RGBA texel per element.
+enum FALLBACKTEXFMT
+{
+	FALLBACKTEX_VEC4 = 0,
+	FALLBACKTEX_UVEC4 = 1,
+	FALLBACKTEX_MAT4 = 2,
+};
+
+GLuint CreateFallbackTex(FALLBACKTEXFMT fmt, size_t elements, const void* data);
+void   AllocFallbackTex(GLuint tex, FALLBACKTEXFMT fmt, size_t elements);
+void   UpdateFallbackTex(GLuint tex, FALLBACKTEXFMT fmt, size_t elements, const void* data);
+void   DeleteFallbackTex(GLuint& tex);
+
 struct SHD;
 struct SAI;
 
@@ -102,8 +130,12 @@ struct alignas(16) RO
 	int32_t   fDynamicLight; // 616 - 619
 	int32_t   trlk;          // 620 - 623
 	glm::vec4 posCenter;     // 624 - 639
-	float     uAlphaCelBorder;
+	// Must mirror ROGL (gl.h): the stream copies sizeof(ROGL) bytes out of this record.
+	int32_t   relightHdr[4] = { 0, 0, 0, 0 };   // 640 - 655
+	int32_t   relightIdx[28] = {};              // 656 - 767
+	float     uAlphaCelBorder;                  // CPU only, after the GPU-visible part
 };
+static_assert(offsetof(RO, relightHdr) == 640 && sizeof(RO) >= 768, "RO must start with the ROGL layout");
 
 // Render Priority List
 struct RPL
@@ -275,6 +307,8 @@ struct GLOB // NOT DONE
 	GLuint EBO;
 
 	GLuint ssboCachedMaterial;
+	// Fallback: attributes 6..8 of VAO read the static lighting baked into ssboCachedMaterial.
+	bool bakeAttribsSet = false;
 
 	// Combined pose-delta buffers for every subglob in this VAO.
 	GLuint poseDposSSBO;
@@ -320,6 +354,10 @@ struct GLOB // NOT DONE
 	GLuint edgeSSBO;  // GL_SHADER_STORAGE_BUFFER
 	GLsizei edgeCount; // number of edges (== ctwef)
 	GLuint edgePoseDposSSBO = 0;
+	// Vertex-SSBO fallback only (GLES drivers that cannot read buffers in the vertex stage): the CELPOINT
+	// buffer is split into three data textures (edgeSSBO = positions) so celborder.vert can fetch them.
+	GLuint edgeBoneIndicesSSBO = 0;
+	GLuint edgeBoneWeightsSSBO = 0;
 	// Ptr to instance model matrix
 	std::shared_ptr <glm::mat4> pdmat;
 	struct BLOT* pblot;

@@ -1,0 +1,63 @@
+plugins { id 'com.android.application' }
+
+// Third-party inputs are placed by android/scripts/setup-android.sh:
+//   third_party/SDL2            SDL 2.30.x source tree (native + Java glue)
+//   third_party/ffmpeg          FFmpeg prefix: include/ and lib/<abi>/*.so|*.a
+def sdlDir    = file("${rootDir}/third_party/SDL2")
+def ffmpegDir = file("${rootDir}/third_party/ffmpeg")
+
+android {
+    namespace 'org.projectcane.cane'
+    compileSdk 34
+    ndkVersion '26.3.11579264'
+
+    defaultConfig {
+        applicationId 'org.projectcane.cane'
+        minSdk 29            // Android 10: OpenGL ES 3.2 devices with Vulkan-class GPUs
+        targetSdk 34
+        versionCode System.getenv('CANE_VERSION_CODE')?.toInteger() ?: 4101
+        versionName System.getenv('CANE_VERSION_NAME') ?: '0.4.1-android.1'
+        ndk { abiFilters 'arm64-v8a' }       // 64-bit ARM only; the game is not 32-bit clean
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++20'
+                arguments "-DCANE_SDL2_DIR=${sdlDir}",
+                          "-DCANE_FFMPEG_ROOT=${ffmpegDir}",
+                          "-DANDROID_STL=c++_shared",
+                          "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+    externalNativeBuild {
+        cmake { path file('../../CMakeLists.txt') }
+    }
+    sourceSets {
+        main {
+            java.srcDirs += "${sdlDir}/android-project/app/src/main/java"
+            jniLibs.srcDirs += ["${ffmpegDir}/lib"]
+            // DialogAudioTable.inc (shared with the desktop File Extractor) is read by the on-device extractor.
+            assets.srcDirs += ["${rootDir}/../File Extractor GUI/Data"]
+        }
+    }
+    // Release signing comes from the environment (CI secrets); without it the
+    // release APK is left unsigned and the debug build (debug keystore) is used for testing.
+    signingConfigs {
+        release {
+            def ks = System.getenv('CANE_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('CANE_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('CANE_KEY_ALIAS')
+                keyPassword System.getenv('CANE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            externalNativeBuild { cmake { arguments "-DCANE_DIAG=OFF" } }
+            if (System.getenv('CANE_KEYSTORE')) signingConfig signingConfigs.release
+        }
+    }
+    packaging { jniLibs { useLegacyPackaging = true } }
+}

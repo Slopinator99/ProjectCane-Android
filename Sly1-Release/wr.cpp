@@ -299,9 +299,19 @@ void ApplyWrGlob(WR* pwr, ALO* palo, GLOB* pglob)
 
 	w.state.assign(totalVec4, glm::vec4(0.0f));
 
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, w.ssboState);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, bytes, nullptr, GL_DYNAMIC_DRAW);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	if (g_fVertexUboFallback)
+	{
+		// §8.1: warp state is a data texture (buffer 6 -> unit 4); the old
+		// texture is deleted first because TexStorage2D cannot resize one.
+		glDeleteTextures(1, &w.ssboState);
+		w.ssboState = CreateFallbackTex(FALLBACKTEX_VEC4, totalVec4, w.state.data());
+	}
+	else
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, w.ssboState);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, bytes, nullptr, GL_DYNAMIC_DRAW);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	}
 }
 
 float GFromOnz(ONZ* ponz)
@@ -647,9 +657,17 @@ void UpdateWrStateVectors(WR* pwr)
 		// --------------------------------------------------------
 		if (w.ssboState != 0)
 		{
-			glBindBuffer(GL_SHADER_STORAGE_BUFFER, w.ssboState);
-			glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, (GLsizeiptr)(w.state.size() * sizeof(glm::vec4)), w.state.data());
-			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+			if (g_fVertexUboFallback)
+			{
+				UpdateFallbackTex(w.ssboState, FALLBACKTEX_VEC4,
+					w.state.size(), w.state.data());
+			}
+			else
+			{
+				glBindBuffer(GL_SHADER_STORAGE_BUFFER, w.ssboState);
+				glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, (GLsizeiptr)(w.state.size() * sizeof(glm::vec4)), w.state.data());
+				glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+			}
 		}
 
 		pwrbg = pwrbg->pwrbgNextWr;

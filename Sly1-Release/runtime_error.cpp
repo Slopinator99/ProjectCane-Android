@@ -6,6 +6,9 @@
 #include <csignal>
 #include <ctime>
 #endif
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include <cstdarg>
 #include <chrono>
 #include <cstdlib>
@@ -106,6 +109,21 @@ void ReportRuntimeError(const char* subsystem, const char* format, ...)
 	va_end(arguments);
 	std::fputc('\n', stderr);
 	std::fflush(stderr);
+
+#if defined(__ANDROID__)
+	// stderr is invisible on Android (see main.cpp's stdio pump, which can
+	// still lose the final lines when the process dies). Log synchronously
+	// so fatal errors are always readable in logcat.
+	{
+		char buffer[1024];
+		va_list logArguments;
+		va_start(logArguments, format);
+		std::vsnprintf(buffer, sizeof(buffer), format, logArguments);
+		va_end(logArguments);
+		__android_log_print(ANDROID_LOG_ERROR, "cane", "[%s] %s",
+			subsystem != nullptr ? subsystem : "Runtime", buffer);
+	}
+#endif
 }
 
 void ReportFatalRuntimeError(const char* message)

@@ -101,7 +101,13 @@ enum RESPK : int
 	RESPK_AudioOutputDevice,
 	RESPK_ResetMappings,
 
-	RESPK_Max = 79
+	RESPK_BackupSaves,   // Android: save backup / restore screen (numbered after upstream's entries)
+	RESPK_TouchMode,     // Android: on-screen controller settings
+	RESPK_TouchOpacity,
+	RESPK_TouchSize,
+	RESPK_TouchEdit,
+
+	RESPK_Max = 84
 };
 
 // -----------------------------------------------------------------------------
@@ -296,7 +302,7 @@ inline RESPK s_arespkSlots[7] =
     RESPK_Back
 };
 
-inline const RESPK s_arespkControlsMenuAll[12] =
+inline const RESPK s_arespkControlsMenuAll[16] =
 {
 	RESPK_Vibration,
 	RESPK_CameraInvert,
@@ -309,10 +315,14 @@ inline const RESPK s_arespkControlsMenuAll[12] =
 	RESPK_ControllerDeadzone,
 	RESPK_KeyboardMapping,
 	RESPK_ControllerMapping,
+	RESPK_TouchMode,      // Android only (filtered out elsewhere)
+	RESPK_TouchOpacity,
+	RESPK_TouchSize,
+	RESPK_TouchEdit,
     RESPK_Back
 };
 
-inline RESPK s_arespkControlsMenu[12]{};
+inline RESPK s_arespkControlsMenu[16]{};
 
 inline RESPK s_arespkKeyboardMapping[18] =
 {
@@ -355,13 +365,14 @@ inline const RESPK s_arespkOptionsMenuAll[] =
     RESPK_CutsceneSkipControls,
     RESPK_Video,
     RESPK_Controls,
+    RESPK_BackupSaves,   // hidden outside Android (see the options menu builder in prompt.cpp)
 	RESPK_AutoIconify,
     RESPK_Back
 };
 
 inline RESPK s_arespkOptionsMenu[std::size(s_arespkOptionsMenuAll)]{};
 
-inline RESPK s_arespkVideoMenu[] =
+inline const RESPK s_arespkVideoMenuAll[] =
 {
     RESPK_Msaa,
 	RESPK_AnisotropicFiltering,
@@ -381,6 +392,9 @@ inline RESPK s_arespkVideoMenu[] =
 	RESPK_ResetVideo,
     RESPK_Back
 };
+
+// Built when the menu opens: platform-specific entries (window mode and VSync on Android) are left out.
+inline RESPK s_arespkVideoMenu[std::size(s_arespkVideoMenuAll)]{};
 
 // -----------------------------------------------------------------------------
 // Dynamic response buffers
@@ -426,6 +440,9 @@ inline char g_achzRespk74[64]{};
 inline char g_achzRespk75[64]{};
 inline char g_achzRespk76[64]{};
 inline char g_achzRespk77[128]{};
+inline char g_achzRespkTouchMode[64]{};
+inline char g_achzRespkTouchOpacity[64]{};
+inline char g_achzRespkTouchSize[64]{};
 inline char g_aachzKeyboardBindings[BTN_MAX][64]{};
 
 // -----------------------------------------------------------------------------
@@ -534,7 +551,11 @@ inline const char* s_mprespkachz[RESPK_Max] =
     g_achzSaveSlot4,          // 36 RESPK_Slot4
     g_achzSaveSlot5,          // 37 RESPK_Slot5
     g_achzSaveSlot6,          // 38 RESPK_Slot6
+#ifdef __ANDROID__
+    "Exit Game",              // 39 RESPK_ExitToDesktop
+#else
     "Exit to Desktop",        // 39 RESPK_ExitToDesktop
+#endif
     g_achzRespk40,            // 40 RESPK_GuiScale
 	g_achzRespk41,             // 41 RESPK_CameraInvert
 	"Keyboard Mapping...",    // 42 RESPK_KeyboardMapping
@@ -563,7 +584,12 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	g_achzRespk75,            // 75 RESPK_ResolutionScale
 	g_achzRespk76,            // 76 RESPK_ControllerDeadzone
 	g_achzRespk77,            // 77 RESPK_AudioOutputDevice
-	"Reset Mappings"        // 78 RESPK_ResetMappings
+	"Reset Mappings",         // 78 RESPK_ResetMappings
+	"Backup / Restore Saves...", // 79 RESPK_BackupSaves
+	g_achzRespkTouchMode,     // 80 RESPK_TouchMode
+	g_achzRespkTouchOpacity,  // 81 RESPK_TouchOpacity
+	g_achzRespkTouchSize,     // 82 RESPK_TouchSize
+	"Edit Touch Layout..."    // 83 RESPK_TouchEdit
 };
 
 // -----------------------------------------------------------------------------
@@ -629,7 +655,12 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr },           // 69 RESPK_AutoIconify
 	{ 0, nullptr },           // 70 RESPK_AnisotropicFiltering
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
-	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }
+	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
+	{ 0, nullptr },           // 79 RESPK_BackupSaves
+	{ 0, nullptr },           // 80 RESPK_TouchMode
+	{ 0, nullptr },           // 81 RESPK_TouchOpacity
+	{ 0, nullptr },           // 82 RESPK_TouchSize
+	{ 0, nullptr }            // 83 RESPK_TouchEdit
 };
 
 // -----------------------------------------------------------------------------

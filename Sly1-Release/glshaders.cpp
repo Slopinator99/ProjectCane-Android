@@ -19,6 +19,17 @@ GLuint s_activeShaderProgram = (std::numeric_limits<GLuint>::max)();
 #include <iostream>
 #include <stdexcept>
 
+// Set by gl.cpp around glGlobShader.Init in the vertex-SSBO fallback so the static-lighting bake can
+// capture the vertex stage's material outputs with transform feedback.
+const char* const* g_tfVaryings = nullptr;
+int g_tfVaryingCount = 0;
+
+#ifdef CANE_GLES
+// gl.cpp §8.1 gate: set when the driver lacks vertex-stage SSBOs; ToGlslEs
+// then injects the UBO/data-texture shader variant.
+extern bool g_fVertexUboFallback;
+#endif
+
 namespace
 {
 	void ShowShaderErrorConsole()
@@ -82,6 +93,35 @@ namespace
 		return 0;
 	}
 
+#ifdef CANE_GLES
+	// Desktop GLSL 4.30/3.30 -> GLSL ES 3.20. The sources are otherwise valid
+	// ES (checked with glslangValidator), so only the version line changes and
+	// default precisions must be declared.
+	std::string ToGlslEs(std::string src, bool fragment)
+	{
+		const size_t v = src.find("#version");
+		if (v != std::string::npos)
+		{
+			const size_t eol = src.find('\n', v);
+			src.erase(v, (eol == std::string::npos ? src.size() : eol + 1) - v);
+		}
+		std::string head = "#version 320 es\n"
+			"precision highp float;\nprecision highp int;\n"
+			"precision highp sampler2D;\nprecision highp sampler2DArray;\n"
+			"precision highp usampler2D;\nprecision highp isampler2D;\n";
+		// §8.1: the gate downgraded this context to the UBO/data-texture path
+		// (glob.h); declare the variant macro after the version/precision
+		// header so glob/celborder/dysh compile their fallback blocks.
+		if (g_fVertexUboFallback)
+			head += "#define CANE_VERTEX_UBO_FALLBACK 1\n";
+#ifdef CANE_DIAG
+		head += "#define CANE_DIAG_SHADER 1\n";
+#endif
+		(void)fragment;
+		return head + src;
+	}
+#endif
+
 	std::string GetEmbeddedShaderSource(const char* filename)
 	{
 		#ifdef CANE_PORTABLE_SHADERS
@@ -129,12 +169,18 @@ void GLSHADER::Init(const char* vertexFile, const char* geometryFile, const char
 
 	if (vertexFile != NULL)
 		vertexCode = GetEmbeddedShaderSource(vertexFile);
+#ifdef CANE_GLES
+	if (vertexFile != NULL) vertexCode = ToGlslEs(vertexCode, false);
+#endif
 
 	if (geometryFile != NULL)
 		geometryCode = GetEmbeddedShaderSource(geometryFile);
 
 	if (fragmentFile != NULL)
 		fragmentCode = GetEmbeddedShaderSource(fragmentFile);
+#ifdef CANE_GLES
+	if (fragmentFile != NULL) fragmentCode = ToGlslEs(fragmentCode, true);
+#endif
 
 	const char* vertexSource   = NULL;
 	const char* geometrySource = NULL;
@@ -217,6 +263,9 @@ void GLSHADER::Init(const char* vertexFile, const char* geometryFile, const char
 
 	if (fragmentFile != NULL)
 		glAttachShader(ID, fragmentShader);
+
+	if (g_tfVaryingCount > 0)
+		glTransformFeedbackVaryings(ID, g_tfVaryingCount, g_tfVaryings, GL_INTERLEAVED_ATTRIBS);
 
 	glLinkProgram(ID);
 	if (!compileErrors(ID, "PROGRAM", vertexFile, geometryFile, fragmentFile))

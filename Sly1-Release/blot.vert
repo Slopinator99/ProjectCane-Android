@@ -8,6 +8,9 @@ uniform mat4 u_model;
 uniform mat4 u_projection;
 uniform vec4 u_uvRect;
 uniform int  u_useVertexColor;
+#ifdef GL_ES
+uniform float u_pointSize;
+#endif
 
 layout(location = 0) out vec2 v_texcoord;
 layout(location = 1) out vec4 v_color;
@@ -22,4 +25,7 @@ void main()
         v_color = vec4(1.0);
 
     gl_Position = u_projection * u_model * vec4(a_position, 0.0, 1.0);
+#ifdef GL_ES
+    gl_PointSize = u_pointSize;
+#endif
 }

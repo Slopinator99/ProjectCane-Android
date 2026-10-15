@@ -1,4 +1,7 @@
 #include "sidebag.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#endif
 
 std::shared_ptr <CSidebag> PsidebagNew()
 {
@@ -10,6 +13,10 @@ CRef CSidebag::RefAddBinding(int n, CRef* pref)
 	CRef ret;
 	ret.SetTag(TAGK_Void);
 
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	if (m_csbb >= 16)
+		__android_log_print(ANDROID_LOG_WARN, "cane", "[Sidebag] DROP (full) sidebag=%p n=%d", (void*)this, n);
+#endif
 	if (pref == nullptr || m_csbb < 0 || m_csbb >= 16)
 		return ret;
 

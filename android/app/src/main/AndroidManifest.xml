@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Rumble on handhelds/phones whose pad has no motor (and for the on-screen controller) uses the device vibrator. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- The renderer needs OpenGL ES 3.2 (base-vertex draws, vertex-stage SSBOs). -->
+    <uses-feature android:glEsVersion="0x00030002" android:required="true" />
+    <!-- Controller-only: no touch controls are drawn, so a touchscreen is optional. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+
+    <application
+        android:label="Sly Cooper (ProjectCane)"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:isGame="true"
+        android:largeHeap="true"
+        android:appCategory="game"
+        android:preserveLegacyExternalStorage="true">
+
+        <activity
+            android:name=".CaneActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboardHidden|keyboard|orientation|screenSize|screenLayout|uiMode|smallestScreenSize|density|navigation"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTask">
+        </activity>
+
+        <!-- Launcher: starts the game, or first imports the game data (see ImportActivity). -->
+        <activity
+            android:name=".ImportActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Save backup / restore, opened from the in-game Options menu. -->
+        <activity
+            android:name=".SavesActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+    </application>
+</manifest>

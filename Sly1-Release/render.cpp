@@ -1,4 +1,8 @@
 #include "render.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#include <chrono>
+#endif
 #include "emitter.h"
 #include "main.h"
 #include "blip.h"
@@ -254,6 +258,30 @@ namespace
 
 	void BindShaderStorageBuffer(GLuint index, GLuint buffer)
 	{
+		if (g_fVertexUboFallback)
+		{
+			// §8.1: under the fallback the shader-visible data behind these
+			// binding indices are textures, not buffers. Route index -> texture
+			// unit (units fixed by gl.cpp's sampler setup): 6 warpState / 8
+			// edges -> 4, 9 bones -> 5, 10 pose/edge-index -> 6, 11 pose/
+			// edge-weight -> 7, 12 edge-pose -> 8. Indices 2..5 and 13 are
+			// uniform blocks bound once by light.cpp/shadow.cpp, and 7
+			// (cached lighting) does not exist in the fallback, so those are
+			// no-ops. BindTexture2D is called unconditionally: unit 4 is
+			// shared by warpState (glob) and edges (celborder) and only that
+			// cache can notice the switch (ssboBindings is keyed by index).
+			static const int kTexUnitForBinding[16] = {
+				-1, -1, -1, -1, -1, -1, 4, -1, 4, 5, 6, 7, 8, -1, -1, -1
+			};
+			if (index < std::size(kTexUnitForBinding) && kTexUnitForBinding[index] >= 0)
+			{
+				BindTexture2D(static_cast<GLuint>(kTexUnitForBinding[index]), buffer);
+				if (index < std::size(s_renderState.ssboBindings))
+					s_renderState.ssboBindings[index] = buffer;
+			}
+			return;
+		}
+
 		if (index >= std::size(s_renderState.ssboBindings) ||
 			s_renderState.ssboBindings[index] != buffer)
 		{
@@ -770,8 +798,29 @@ static bool FStageTvContext(const TV* ptv)
 	return x1 > x0 && y1 > y0;
 }
 
+extern int g_caneNoBake;
+
 static void StageGlobRecord(RPL* prpl, TV* ptvContext)
 {
+	// Fallback: a draw that claims "baked" for a glob that has never run the lighting bake itself (for
+	// example an instance that inherited the baked state from another glob) would read an empty cache
+	// and flash dark. Relight it instead; the bake pass then fills the cache.
+	if (g_fVertexUboFallback && prpl->ro.trlk == TRLK_Baked && prpl->pglob != nullptr &&
+		prpl->pglob->ssboCachedMaterial != 0 && (!prpl->pglob->bakeAttribsSet || g_caneNoBake))
+	{
+		prpl->ro.trlk = TRLK_Relight;
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+		static int s_forced = 0;
+		static auto s_last = std::chrono::steady_clock::now();
+		++s_forced;
+		if (std::chrono::duration<double>(std::chrono::steady_clock::now() - s_last).count() >= 1.0)
+		{
+			s_last = std::chrono::steady_clock::now();
+			__android_log_print(ANDROID_LOG_INFO, "cane", "[Bake] %d draws of never-baked globs turned into relights (last second)", s_forced);
+			s_forced = 0;
+		}
+#endif
+	}
 	prpl->fQueuedCacheWrite = prpl->ro.trlk == TRLK_Relight;
 	prpl->ro.blotTvLight = 0;
 
@@ -790,6 +839,26 @@ static void StageGlobRecord(RPL* prpl, TV* ptvContext)
 			prpl->ro.trlk = TRLK_Quick;
 			prpl->ro.fDynamicLight = 0;
 		}
+	}
+
+	// Vertex-SSBO fallback recomputes the static bake per vertex. Hand the shader a short list of
+	// the lights that can reach this draw instead of making it scan the whole level table. This is
+	// the single place every glob record passes through before it reaches the GPU.
+	for (int k = 0; k < 4; ++k) prpl->ro.relightHdr[k] = 0;
+	if (g_fVertexUboFallback && prpl->ro.trlk != TRLK_Quick)
+	{
+		const glm::vec3 center(prpl->ro.posCenter);
+		const float radius = prpl->ro.sRadius;
+		const bool fBaked = prpl->ro.trlk == TRLK_Baked || prpl->ro.trlk == TRLK_Relight;
+
+		// Static list: whole-table relight list for baked draws, zone-active static lights otherwise.
+		const int nStatic = fBaked ? BuildRelightList(center, radius, prpl->ro.relightIdx, 16)
+		                           : BuildActiveLightList(1, center, radius, prpl->ro.relightIdx, 16);
+		prpl->ro.relightHdr[0] = nStatic >= 0 ? nStatic + 1 : 0;
+		prpl->ro.relightHdr[2] = fBaked ? 0 : 1;
+
+		const int nDynamic = BuildActiveLightList(2, center, radius, prpl->ro.relightIdx + 16, 12);
+		prpl->ro.relightHdr[1] = nDynamic >= 0 ? nDynamic + 1 : 0;
 	}
 
 	prpl->streamOffset = StageFrameStream(&ropStream, &prpl->ro, sizeof(ROGL));
@@ -859,6 +928,95 @@ static void StageDrawStreams()
 		UploadFrameStream(&rcbStream);
 }
 
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#include <chrono>
+int g_caneSkip = 0;
+int g_caneFrag = 0;
+int g_caneFrameBakes = 0;   // diag: subglob bakes issued since the last presented frame
+int g_caneVert = 0;   // live pass-skip mask for profiling (adb shell setprop debug.cane.skip N); see main.cpp
+#endif
+
+// Debug switches (set from main.cpp in debug builds; always 0 in release).
+int g_caneNoPrebake = 0;   // debug.cane.noprebake 1: bake inside the scene passes again (A/B for the Adreno glitch)
+int g_caneNoBake = 0;   // debug.cane.nobake 1: relight every draw instead of reading the bake cache (A/B for flicker)
+
+// Fallback bake pre-pass. Every transform-feedback bake of the frame runs here, before the first scene draw, so
+// no transform-feedback draw ever sits between two scene draws (Adreno draws such frames wrongly now and then).
+static bool s_bakesDone = false;
+static void BakeGlobSubLighting(GLOB* pglob, const SUBGLOB& sub);
+
+static void PreBakeGlob(RPL* prpl)
+{
+	GLOB* pglob = prpl->pglob;
+	if (pglob == nullptr || pglob->ssboCachedMaterial == 0 || pglob->fThreeWay != 1 || prpl->ro.trlk != TRLK_Relight)
+		return;
+
+	BindFrameStreamRange(&ropStream, prpl->streamOffset, sizeof(ROGL));
+
+	GLOBSET* pglobset = prpl->palo != nullptr ? &prpl->palo->globset : nullptr;
+	const bool fHasBones = pglobset != nullptr && pglobset->cbnd > 0 && pglobset->boneMatrixSSBO != 0;
+	const bool fHasPoses = pglobset != nullptr && pglob->poseCount > 0 && pglob->poseDposSSBO != 0 && pglob->poseDnormalSSBO != 0 && !pglobset->agPoses.empty();
+
+	glUniform1i(glslfPose, fHasPoses ? 1 : 0);
+	if (fHasBones)
+		BindShaderStorageBuffer(9, pglobset->boneMatrixSSBO);
+	if (fHasPoses)
+	{
+		BindShaderStorageBuffer(10, pglob->poseDposSSBO);
+		BindShaderStorageBuffer(11, pglob->poseDnormalSSBO);
+		glUniform1i(glslPoseCount, pglob->poseCount);
+		glUniform1fv(glslPoseWeights, pglob->poseCount, pglobset->agPoses.data());
+	}
+
+	BindVertexArray(pglob->VAO);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, pglob->EBO);
+
+	for (const SUBGLOB& sub : pglob->asubglob)
+	{
+		glUniform1i(glslRko, 1);   // the shader only runs the three-way lighting when rko says so
+		glUniform1i(glslfSkin, fHasBones && sub.cibnd > 0 ? 1 : 0);
+		if (activeShadows.numShadows > 0)
+		{
+			const glm::vec4 subGlobPosCenter = prpl->ro.model * glm::vec4(sub.posCenter, 1.0f);
+			glUniform3f(glslSubGlobPosCenter, subGlobPosCenter.x, subGlobPosCenter.y, subGlobPosCenter.z);
+			glUniform1f(glslSubGlobRadius, pglob->rSubglobRadius * sub.sRadius);
+		}
+		glUniform1f(glslUnSelfIllum, sub.unSelfIllum);
+		BakeGlobSubLighting(pglob, sub);
+	}
+	glUniform1i(glslfSkin, 0);
+	glUniform1i(glslfPose, 0);
+}
+
+static void PreBakeAll()
+{
+	auto Run = [](std::vector<RPL>& list, int count)
+	{
+		for (int i = 0; i < count; ++i)
+			if (list[i].PFNDRAWRPL == DrawGlob)
+				PreBakeGlob(&list[i]);
+	};
+	Run(g_backGroundPrpl, g_backGroundCount);
+	Run(g_backGroundBlendPrpl, g_backGroundBlendCount);
+	Run(g_blotContextPrpl, g_blotContextCount);
+	Run(g_opaquePrpl, g_opaqueCount);
+	Run(g_cutOutBlendAddPrpl, g_cutOutBlendAddCount);
+	Run(g_cutOutPrpl, g_cutOutCount);
+	Run(g_projVolumePrpl, g_projVolumeCount);
+	Run(g_opaqueAfterProjVolumePrpl, g_opaqueAfterProjVolumeCount);
+	Run(g_cutOutAfterProjVolumeAddPrpl, g_cutOutAfterProjVolumeAddCount);
+	Run(g_cutOutAfterProjVolumePrpl, g_cutOutAfterProjVolumeCount);
+	Run(g_murkClearPrpl, g_murkClearCount);
+	Run(g_murkOpaquePrpl, g_murkOpaqueCount);
+	Run(g_murkFillPrpl, g_murkFillCount);
+	Run(g_translucentAddPrpl, g_translucentAddCount);
+	Run(g_translucentPrpl, g_translucentCount);
+	Run(g_foreGroundPrpl, g_foreGroundCount);
+	Run(g_worldMapPrpl, g_worldMapCount);
+	Run(g_maxPrpl, g_maxCount);
+}
+
 void DrawSw(SW* psw, CM* pcm)
 {
 	// Other renderers (notably ImGui) may have changed OpenGL state since the
@@ -869,6 +1027,14 @@ void DrawSw(SW* psw, CM* pcm)
 
 	UseShader(glGlobShader);
 	glUniform1i(glslProjectedVolumeFinalPass, 0);
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	{
+		static GLint s_caneFragLoc = glGetUniformLocation(glGlobShader.ID, "caneFrag");
+		if (s_caneFragLoc >= 0) glUniform1i(s_caneFragLoc, g_caneFrag);
+		static GLint s_caneVertLoc = glGetUniformLocation(glGlobShader.ID, "caneVert");
+		if (s_caneVertLoc >= 0) glUniform1i(s_caneVertLoc, g_caneVert);
+	}
+#endif
 
 	//std::cout << g_cFrameGlobs << "\n";
 	BeginFrameStream(&ropStream);
@@ -879,12 +1045,42 @@ void DrawSw(SW* psw, CM* pcm)
 		BeginFrameStream(&rcbStream);
 	
 	SortRenderRpl();
-	StageDrawStreams();
-
-	glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CMGL), &pcm->matWorldToClip);
-
+	// The per-draw light lists built while staging use this frame's active-light arrays, so compute
+	// them first (this also updates the dynamic lights' CPU copies).
 	PrepareSwLights(psw, pcm);
+	StageDrawStreams();
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	{
+		static auto s_lastLog = std::chrono::steady_clock::now();
+		const auto now = std::chrono::steady_clock::now();
+		if (std::chrono::duration<double>(now - s_lastLog).count() >= 1.0)
+		{
+			s_lastLog = now;
+			__android_log_print(ANDROID_LOG_INFO, "cane",
+				"[Passes] skip=%d globs=%d cel=%d dyn=%d bg=%d+%d blotCtx=%d opaque=%d+%d cutout=%d+%d+%d+%d celBorder=%d+%d+%d projVol=%d murk=%d/%d/%d transl=%d+%d blip=%d fg=%d",
+				g_caneSkip, g_cFrameGlobs, g_cFrameCelGlobs, g_dynamicTextureCount, g_backGroundCount, g_backGroundBlendCount,
+				g_blotContextCount, g_opaqueCount, g_opaqueAfterProjVolumeCount, g_cutOutCount, g_cutOutBlendAddCount,
+				g_cutOutAfterProjVolumeCount, g_cutOutAfterProjVolumeAddCount, g_celBorderCount, g_celBorderAfterProjVolumeCount,
+				g_translucentCelBorderCount, g_projVolumeCount, g_murkClearCount, g_murkOpaqueCount, g_murkFillCount,
+				g_translucentCount, g_translucentAddCount, g_blipCount, g_foreGroundCount);
+		}
+		// Discard whole passes (their counts must still reach zero or the arrays grow every frame).
+		if (g_caneSkip & 1)    g_dynamicTextureCount = 0;
+		if (g_caneSkip & 2)    { g_backGroundCount = 0; g_backGroundBlendCount = 0; }
+		if (g_caneSkip & 4)    { g_opaqueCount = 0; g_opaqueAfterProjVolumeCount = 0; }
+		if (g_caneSkip & 8)    { g_cutOutCount = 0; g_cutOutBlendAddCount = 0; g_cutOutAfterProjVolumeCount = 0; g_cutOutAfterProjVolumeAddCount = 0; }
+		if (g_caneSkip & 16)   { g_celBorderCount = 0; g_celBorderAfterProjVolumeCount = 0; g_translucentCelBorderCount = 0; }
+		if (g_caneSkip & 32)   g_projVolumeCount = 0;
+		if (g_caneSkip & 64)   { g_murkClearCount = 0; g_murkOpaqueCount = 0; g_murkFillCount = 0; }
+		if (g_caneSkip & 128)  { g_translucentCount = 0; g_translucentAddCount = 0; }
+		if (g_caneSkip & 256)  g_blipCount = 0;
+		if (g_caneSkip & 512)  g_foreGroundCount = 0;
+		if (g_caneSkip & 1024) g_blotContextCount = 0;
+	}
+#endif
+
+	UpdateCmUbo(&pcm->matWorldToClip);
+
 	PrepareSwShadows(psw, pcm);
 
 	// OpenGL line widths are measured in render-target pixels. Scale the
@@ -931,6 +1127,13 @@ void DrawSw(SW* psw, CM* pcm)
 	// Dynamic maps have now been rendered. Bind the shared projected-shadow
 	// array once before regular geometry is submitted.
 	BindSwShadowTextures(psw);
+
+	s_bakesDone = false;
+	if (g_fVertexUboFallback && g_fBakePrepass && !g_caneNoPrebake)
+	{
+		PreBakeAll();
+		s_bakesDone = true;
+	}
 
 	if (g_backGroundCount > 0)
 	{
@@ -1458,6 +1661,122 @@ void BindGlobThreeWayTextures(GLuint ambientTexture, GLuint diffuseTexture, GLui
 	SetActiveTextureUnit(0);
 }
 
+// Vertex-SSBO fallback: capture the static lighting of one subglob into the glob's cache buffer with a
+// transform-feedback pass over its vertices (GL_POINTS, rasterization off), so later draws of the glob
+// read it as vertex attributes instead of re-running the light loops per vertex per frame. Uses the
+// same program and per-draw state as the draw that follows.
+// Instanced globs and globset clones share one VAO but each owns its cache buffer, so attributes 6..8
+// must follow whichever glob is drawing: remember which buffer each VAO currently points at.
+static void EnsureBakeAttribs(GLOB* pglob)
+{
+	static std::unordered_map<GLuint, GLuint> s_vaoCache;
+	GLuint& bound = s_vaoCache[pglob->VAO];
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	{
+		// Every vertex the glob can fetch must have a cache entry, or the attribute read runs past the buffer.
+		static std::unordered_map<GLuint, int> s_checked;
+		if (s_checked.emplace(pglob->ssboCachedMaterial, 1).second)
+		{
+			GLint bufSize = 0;
+			glBindBuffer(GL_COPY_READ_BUFFER, pglob->ssboCachedMaterial);
+			glGetBufferParameteriv(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, &bufSize);
+			glBindBuffer(GL_COPY_READ_BUFFER, 0);
+			size_t vboVerts = 0;
+			for (const SUBGLOB& s : pglob->asubglob) vboVerts += s.vertices.size();
+			const bool bad = (int64_t)pglob->poseVertexCount * 36 > bufSize || (int64_t)vboVerts * 36 > bufSize;
+			__android_log_print(bad ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "cane",
+				"[Bake] cache check glob=%p buf=%d poseVerts=%d subVerts=%zu%s", (void*)pglob, bufSize, pglob->poseVertexCount, vboVerts, bad ? "  TOO SMALL" : "");
+		}
+	}
+#endif
+	if (bound == pglob->ssboCachedMaterial)
+		return;
+	bound = pglob->ssboCachedMaterial;
+	glBindBuffer(GL_ARRAY_BUFFER, pglob->ssboCachedMaterial);
+	glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, 36, (void*)0);
+	glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, 36, (void*)4);
+	glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, 36, (void*)20);
+	glEnableVertexAttribArray(6);
+	glEnableVertexAttribArray(7);
+	glEnableVertexAttribArray(8);
+}
+
+static void BakeGlobSubLighting(GLOB* pglob, const SUBGLOB& sub)
+{
+	if (pglob->ssboCachedMaterial == 0 || pglob->poseVertexCount <= 0 || glslCaneBake == (GLuint)-1)
+		return;
+
+	// The subglob's vertices run from its baseVertex to the next subglob's baseVertex (or the end).
+	int end = pglob->poseVertexCount;
+	for (const SUBGLOB& other : pglob->asubglob)
+		if (other.baseVertex > sub.baseVertex && other.baseVertex < end)
+			end = other.baseVertex;
+	int count = end - sub.baseVertex;
+	if (count <= 0)
+		return;
+
+	constexpr GLsizei kBakeStride = 36;   // float ambient + vec4 midtone + vec4 light
+
+	EnsureBakeAttribs(pglob);
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	if (!pglob->bakeAttribsSet)
+		__android_log_print(ANDROID_LOG_INFO, "cane", "[FirstBake] cf=%d glob=%p subs=%zu verts=%d", g_cframe, (void*)pglob, pglob->asubglob.size(), pglob->poseVertexCount);
+#endif
+	pglob->bakeAttribsSet = true;   // this glob's cache has now been written at least once
+
+	// The cache buffer is also bound as a vertex attribute source: unbind it from the VAO's point of
+	// view while it is the transform-feedback target.
+	glDisableVertexAttribArray(6);
+	glDisableVertexAttribArray(7);
+	glDisableVertexAttribArray(8);
+
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	{
+		static int s_subs = 0, s_verts = 0, s_frames = 0, s_lastFrame = -1;
+		static auto s_last = std::chrono::steady_clock::now();
+		++s_subs;
+		++g_caneFrameBakes;
+		{
+			GLint bufSize = 0;
+			glBindBuffer(GL_COPY_READ_BUFFER, pglob->ssboCachedMaterial);
+			glGetBufferParameteriv(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, &bufSize);
+			glBindBuffer(GL_COPY_READ_BUFFER, 0);
+			if ((int64_t)(sub.baseVertex + count) * kBakeStride > bufSize)
+				__android_log_print(ANDROID_LOG_WARN, "cane", "[Bake] OVERRUN glob=%p base=%d count=%d need=%lld have=%d poseVerts=%d",
+					(void*)pglob, sub.baseVertex, count, (long long)(sub.baseVertex + count) * kBakeStride, bufSize, pglob->poseVertexCount);
+		}
+		s_verts += count;
+		if (s_lastFrame != g_cframe) { ++s_frames; s_lastFrame = g_cframe; }
+		if (std::chrono::duration<double>(std::chrono::steady_clock::now() - s_last).count() >= 1.0)
+		{
+			s_last = std::chrono::steady_clock::now();
+			__android_log_print(ANDROID_LOG_INFO, "cane", "[Bake] last second: %d subglob bakes, %d vertices, in %d frames", s_subs, s_verts, s_frames);
+			s_subs = s_verts = s_frames = 0;
+		}
+	}
+#endif
+	glBindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, pglob->ssboCachedMaterial,
+		static_cast<GLintptr>(sub.baseVertex) * kBakeStride, static_cast<GLsizeiptr>(count) * kBakeStride);
+	glUniform1i(glslCaneBake, 1);
+	glEnable(GL_RASTERIZER_DISCARD);
+	glBeginTransformFeedback(GL_POINTS);
+	glDrawArrays(GL_POINTS, sub.baseVertex, count);
+	glEndTransformFeedback();
+	glDisable(GL_RASTERIZER_DISCARD);
+	glUniform1i(glslCaneBake, 0);
+	glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+	// Make the captured values visible to the vertex-attribute fetch of the draws that read them.
+	glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	for (GLenum err; (err = glGetError()) != GL_NO_ERROR;)
+		__android_log_print(ANDROID_LOG_WARN, "cane", "[Bake] GL error 0x%x after bake glob=%p base=%d count=%d", err, (void*)pglob, sub.baseVertex, count);
+#endif
+
+	glEnableVertexAttribArray(6);
+	glEnableVertexAttribArray(7);
+	glEnableVertexAttribArray(8);
+}
+
 void DrawGlob(RPL* prpl)
 {
 	GLOB* pglob = prpl->pglob;
@@ -1484,8 +1803,10 @@ void DrawGlob(RPL* prpl)
 	{
 		BindShaderStorageBuffer(10, pglob->poseDposSSBO);
 		BindShaderStorageBuffer(11, pglob->poseDnormalSSBO);
-		BindShaderStorageBuffer(14, poseWeightSSBO);
+		BindShaderStorageBuffer(14, poseWeightSSBO);   // no-op in the vertex-SSBO fallback
 		glUniform1i(glslPoseCount, pglob->poseCount);
+		if (g_fVertexUboFallback)
+			glUniform1fv(glslPoseWeights, pglob->poseCount, pglobset->agPoses.data());
 	}
 
 	if (pglob->fThreeWay == 1)
@@ -1496,6 +1817,12 @@ void DrawGlob(RPL* prpl)
 	}
 
 	BindVertexArray(pglob->VAO);
+	// (upstream no longer rebinds the element buffer here: it is part of the glob's VAO)
+	if (g_fVertexUboFallback && pglob->fThreeWay == 1 && pglob->ssboCachedMaterial != 0 &&
+		(prpl->ro.trlk == TRLK_Relight || prpl->ro.trlk == TRLK_Baked))
+	{
+		EnsureBakeAttribs(pglob);
+	}
 	if (fDebugWireframe)
 	{
 		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -1637,6 +1964,9 @@ void DrawGlob(RPL* prpl)
 		}
 
 		glUniform1f(glslUnSelfIllum, sub.unSelfIllum);
+		// With the pre-pass on, relight draws were already baked before the first scene draw.
+		if (g_fVertexUboFallback && prpl->ro.trlk == TRLK_Relight && !s_bakesDone)
+			BakeGlobSubLighting(pglob, sub);
 		pglob->PFNDRAW(sub.baseVertex, sub.firstIndex, sub.indexCount);
 	}
 
@@ -1681,6 +2011,11 @@ void DrawCelBorder(RPLCEL* prplcel)
 		pglobset->agPoses.size() >= static_cast<size_t>(pglob->poseCount);
 
 	BindShaderStorageBuffer(8, pglob->edgeSSBO);
+	if (g_fVertexUboFallback)
+	{
+		BindShaderStorageBuffer(10, pglob->edgeBoneIndicesSSBO);
+		BindShaderStorageBuffer(11, pglob->edgeBoneWeightsSSBO);
+	}
 
 	if (fSkin)
 	{
@@ -1690,8 +2025,10 @@ void DrawCelBorder(RPLCEL* prplcel)
 	if (fPose)
 	{
 		BindShaderStorageBuffer(12, pglob->edgePoseDposSSBO);
-		BindShaderStorageBuffer(14, poseWeightSSBO);
+		BindShaderStorageBuffer(14, poseWeightSSBO);   // no-op in the vertex-SSBO fallback
 		glUniform1i(glslCelPoseCount, pglob->poseCount);
+		if (g_fVertexUboFallback)
+			glUniform1fv(glslCelPoseWeights, pglob->poseCount, pglobset->agPoses.data());
 	}
 
 	glUniform1i(glslCelSkin, fSkin ? 1 : 0);
@@ -2048,9 +2385,7 @@ void DrawSwCollisionAll(CM* pcm)
 	s_renderState.Invalidate();
 	UseShader(glGeomShader);
 
-	glBindBufferBase(GL_UNIFORM_BUFFER, 0, cmUBO);
-	glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CMGL), &pcm->matWorldToClip);
+	UpdateCmUbo(&pcm->matWorldToClip);
 
 	glBindBufferBase(GL_UNIFORM_BUFFER, 1, geomUBO);
 	glBindBuffer(GL_UNIFORM_BUFFER, geomUBO);
@@ -2093,9 +2428,7 @@ void DrawSwDialogTriggers(CM* pcm)
 	s_renderState.Invalidate();
 	UseShader(glGeomShader);
 
-	glBindBufferBase(GL_UNIFORM_BUFFER, 0, cmUBO);
-	glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CMGL), &pcm->matWorldToClip);
+	UpdateCmUbo(&pcm->matWorldToClip);
 
 	glBindBufferBase(GL_UNIFORM_BUFFER, 1, geomUBO);
 	glBindBuffer(GL_UNIFORM_BUFFER, geomUBO);

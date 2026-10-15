@@ -5050,12 +5050,6 @@ void PauseMusic()
 
 void UnloadMusic()
 {
-	if (s_musicStream.state != MusicState::None)
-	{
-		std::printf("[MUSIC LOAD] unload musid=0x%X state=%d\n",
-			static_cast<unsigned>(s_musicStream.musid),
-			static_cast<int>(s_musicStream.state));
-	}
 	CloseMusicVoice();
 }
 
@@ -5268,9 +5262,6 @@ void PreloadMusidSong(MUSID musid, const char* fileName)
 		CloseMusicVoice();
 		return;
 	}
-	std::printf("[MUSIC LOAD] ready musid=0x%X path=%s segments=%zu tones=%zu\n",
-		static_cast<unsigned>(musid), bankPath.string().c_str(),
-		s_music989.segmentOffsets.size(), s_music989.tones.size());
 	s_music989.registers = s_amRegisters;
 	s_musicStream.musid = musid;
 	s_musicStream.path = bankPath;
@@ -5288,19 +5279,6 @@ void StartMusidSong(MUSID musid, const char* fileName)
 	QueueMusicSegment(0);
 	ActivateQueuedMusicSegments();
 	PrimeMusicSequencerStartup();
-	std::printf("[MUSIC START] musid=0x%X active=%zu pending=%zu voices=%zu excite=%u",
-		static_cast<unsigned>(musid), s_music989.activeSegments.size(),
-		s_music989.pendingStarts.size(), s_music989.voices.size(),
-		static_cast<unsigned>(s_globalExcite));
-	for (const MusicSegment& segment : s_music989.activeSegments)
-	{
-		unsigned mutedMask = 0;
-		for (std::size_t channel = 0; channel < segment.muted.size(); ++channel)
-			if (segment.muted[channel]) mutedMask |= 1u << channel;
-		std::printf(" segment=%u:complete%d:muted%04X",
-			segment.id, segment.complete ? 1 : 0, mutedMask);
-	}
-	std::printf("\n");
 	s_music989.lastUpdate = std::chrono::steady_clock::now();
 	s_musicStream.state = MusicState::Playing;
 	s_musicStream.paused = false;

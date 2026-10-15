@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -100,6 +101,126 @@ GLFWmonitor* MonitorForWindow(GLFWwindow* window)
 
 	return bestMonitor;
 }
+}
+
+// §8.1 vertex-SSBO fallback flag (gl.h: see glob.h for the full description).
+// Set by the gate in InitGL; only ever becomes true under CANE_GLES.
+bool g_fVertexUboFallback = false;
+// Run the lighting bakes in a pre-pass before the scene draws. Needed on Adreno (interleaved transform-feedback
+// draws make it render one frame wrongly now and then); the Mali driver crashes in that pre-pass and does not
+// have the problem, so it keeps baking inside the passes.
+bool g_fBakePrepass = false;
+extern GLint g_glslCmWorldToClip;
+extern GLint g_glslCmCameraPos;
+extern const char* const* g_tfVaryings;
+extern int g_tfVaryingCount;
+
+namespace
+{
+// Texel layout for the fallback data textures: one RGBA texel per vec4/uvec4
+// element; mat4 matrices use a 4-wide texture (texel x = column, y = matrix)
+// so textureSize().y is the exact matrix count.
+void FallbackTexDims(FALLBACKTEXFMT fmt, size_t elements, int& width, int& height)
+{
+	if (fmt == FALLBACKTEX_MAT4)
+	{
+		width = 4;
+		height = static_cast<int>(elements);
+		return;
+	}
+
+	const int texels = static_cast<int>(elements);
+	width = (texels < 1024) ? texels : 1024;
+	height = (texels + width - 1) / width;
+}
+}
+
+// Bindings are saved/restored around creation and upload so model-load calls
+// cannot disturb render.cpp's per-unit texture cache.
+void AllocFallbackTex(GLuint tex, FALLBACKTEXFMT fmt, size_t elements)
+{
+	int width = 0;
+	int height = 0;
+	FallbackTexDims(fmt, elements, width, height);
+	if (tex == 0 || width <= 0 || height <= 0)
+		return;
+
+	const GLenum ifmt = (fmt == FALLBACKTEX_UVEC4) ? GL_RGBA32UI : GL_RGBA32F;
+	GLint prevTexture = 0;
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexStorage2D(GL_TEXTURE_2D, 1, ifmt, width, height);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTexture));
+}
+
+void UpdateFallbackTex(GLuint tex, FALLBACKTEXFMT fmt, size_t elements, const void* data)
+{
+	int width = 0;
+	int height = 0;
+	FallbackTexDims(fmt, elements, width, height);
+	if (tex == 0 || width <= 0 || height <= 0 || data == nullptr)
+		return;
+
+	// `format` is the pixel layout (GL_RGBA / GL_RGBA_INTEGER), `type` the component
+	// type. GL_FLOAT is not a valid format: it raised GL_INVALID_ENUM and left every
+	// float data texture (bones, edges, pose deltas, warp state) all zeros.
+	const GLenum format = (fmt == FALLBACKTEX_UVEC4) ? GL_RGBA_INTEGER : GL_RGBA;
+	const GLenum type = (fmt == FALLBACKTEX_UVEC4) ? GL_UNSIGNED_INT : GL_FLOAT;
+
+	// Storage can exceed the source (VEC4/UVEC4 rows are capped at 1024
+	// texels, leaving up to 1023 padding texels); zero-fill the tail so the
+	// upload never reads past the source array and the shader's bounds
+	// checks see zeros, not garbage. A MAT4 stores 4 texels per matrix, so
+	// its storage always matches its source exactly.
+	const size_t texels = static_cast<size_t>(width) * static_cast<size_t>(height);
+	const size_t texelBytes = 4 * sizeof(float);
+	const size_t srcElemBytes = (fmt == FALLBACKTEX_MAT4) ? (4 * texelBytes) : texelBytes;
+	const size_t srcBytes = elements * srcElemBytes;
+	const size_t storageBytes = texels * texelBytes;
+	const void* upload = data;
+	std::vector<unsigned char> padded;
+	if (srcBytes < storageBytes)
+	{
+		padded.resize(storageBytes, 0);
+		std::memcpy(padded.data(), data, srcBytes);
+		upload = padded.data();
+	}
+
+	GLint prevTexture = 0;
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, format, type, upload);
+#ifdef CANE_DIAG
+	// A bad upload leaves the texture zeroed and nothing else complains.
+	if (const GLenum err = glGetError(); err != GL_NO_ERROR)
+		std::printf("[Graphics] UpdateFallbackTex fmt=%d elements=%zu failed: glGetError=0x%04X\n",
+			static_cast<int>(fmt), elements, static_cast<unsigned>(err));
+#endif
+	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTexture));
+}
+
+GLuint CreateFallbackTex(FALLBACKTEXFMT fmt, size_t elements, const void* data)
+{
+	if (elements == 0)
+		return 0;
+
+	GLuint tex = 0;
+	glGenTextures(1, &tex);
+	AllocFallbackTex(tex, fmt, elements);
+	UpdateFallbackTex(tex, fmt, elements, data);
+	return tex;
+}
+
+void DeleteFallbackTex(GLuint& tex)
+{
+	if (tex != 0)
+		glDeleteTextures(1, &tex);
+
+	tex = 0;
 }
 
 void GL::InitGL()
@@ -200,10 +321,57 @@ void GL::InitGL()
 	constexpr GLint kRequiredCombinedSsboBlocks = 11;
 	constexpr GLint kRequiredSsboBindings = 14;
 	constexpr GLint kRequiredVertexOutputComponents = 48;
-	if (maxVertexSsboBlocks < kRequiredVertexSsboBlocks ||
+
+#ifdef CANE_GLES
+	// §8.1 fallback: GLES drivers such as Mali report zero vertex-stage SSBO
+	// blocks and their compilers reject any vertex shader that declares one.
+	// Re-route the vertex stages through std140 uniform blocks + data textures
+	// when the replacement resources exist: 7 vertex UBO blocks (cm, RO,
+	// lights, active lights, shadows, active shadows, TV lights), binding
+	// points up to 13, SHADOWBLK is the largest block (16 + 255*224 = 57136
+	// bytes) and data textures live on vertex units 4..8.
+	if (maxVertexSsboBlocks < kRequiredVertexSsboBlocks)
+	{
+		GLint maxVertexUboBlocks = 0;
+		GLint maxUboBindings = 0;
+		GLint maxUboBlockSize = 0;
+		GLint maxVertexTextureUnits = 0;
+		GLint maxTextureSize = 0;
+		glGetIntegerv(GL_MAX_VERTEX_UNIFORM_BLOCKS, &maxVertexUboBlocks);
+		glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maxUboBindings);
+		glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxUboBlockSize);
+		glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &maxVertexTextureUnits);
+		glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+
+		constexpr GLint kRequiredVertexUboBlocks = 8;
+		constexpr GLint kRequiredUboBindings = 14;
+		constexpr GLint kRequiredUboBlockSize = 57136;
+		constexpr GLint kRequiredVertexTextureUnits = 9;
+		constexpr GLint kRequiredTextureSize = 1024;
+
+		if (maxVertexOutputComponents >= kRequiredVertexOutputComponents &&
+			maxVertexUboBlocks >= kRequiredVertexUboBlocks &&
+			maxUboBindings >= kRequiredUboBindings &&
+			maxUboBlockSize >= kRequiredUboBlockSize &&
+			maxVertexTextureUnits >= kRequiredVertexTextureUnits &&
+			maxTextureSize >= kRequiredTextureSize)
+		{
+			g_fVertexUboFallback = true;
+			g_fBakePrepass = glRenderer != nullptr && std::strstr(glRenderer, "Adreno") != nullptr;
+			std::cout << "[Graphics] GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = "
+				<< maxVertexSsboBlocks << " (< " << kRequiredVertexSsboBlocks
+				<< "); engaging the vertex-SSBO fallback (lights/shadows -> "
+				<< "std140 UBOs, per-mesh arrays -> data textures, cached "
+				<< "lighting -> per-draw recompute)." << std::endl;
+		}
+	}
+#endif
+
+	if (!g_fVertexUboFallback &&
+		(maxVertexSsboBlocks < kRequiredVertexSsboBlocks ||
 		maxCombinedSsboBlocks < kRequiredCombinedSsboBlocks ||
 		maxSsboBindings < kRequiredSsboBindings ||
-		maxVertexOutputComponents < kRequiredVertexOutputComponents)
+		maxVertexOutputComponents < kRequiredVertexOutputComponents))
 	{
 		ReportRuntimeError("Graphics",
 			"GPU shader limits are below ProjectCane's renderer requirements. "
@@ -221,7 +389,11 @@ void GL::InitGL()
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
+	#ifdef CANE_GLES
+	ImGui_ImplOpenGL3_Init("#version 300 es");
+#else
 	ImGui_ImplOpenGL3_Init("#version 430");
+#endif
 	ImGui::StyleColorsDark();
 
 	const float imguiOffset = g_fDebugGuiOpen ? ImGui::GetFrameHeight() : 0.0f;
@@ -381,7 +553,23 @@ void GL::InitGL()
 	glslDyshModel        = glGetUniformLocation(glDyshadow.ID, "model");
 	glslDyshfSkin        = glGetUniformLocation(glDyshadow.ID, "fSkin");
 
-	glGlobShader.Init("glob.vert", NULL, "glob.frag");
+	// Vertex-SSBO fallback: data-texture sampler units (fixed per program so
+	// BindShaderStorageBuffer can route its index->unit mapping blindly).
+	if (g_fVertexUboFallback)
+		glUniform1i(glGetUniformLocation(glDyshadow.ID, "bonesTex"), 5);
+
+	{
+		// Fallback only: the static-lighting bake captures these vertex outputs (36 bytes per vertex).
+		static const char* const kBakeVaryings[] = { "vMatAmbient", "vMatMidtone", "vMatLight" };
+		if (g_fVertexUboFallback)
+		{
+			g_tfVaryings = kBakeVaryings;
+			g_tfVaryingCount = 3;
+		}
+		glGlobShader.Init("glob.vert", NULL, "glob.frag");
+		g_tfVaryings = nullptr;
+		g_tfVaryingCount = 0;
+	}
 	ropStream.bindIndex = 1;
 	GLint align = 256;
 	glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
@@ -403,6 +591,8 @@ void GL::InitGL()
 	glslRko              = glGetUniformLocation(glGlobShader.ID, "rko");
 	glslProjectedVolumeColor = glGetUniformLocation(glGlobShader.ID, "projectedVolumeColor");
 	glslProjectedVolumeFinalPass = glGetUniformLocation(glGlobShader.ID, "projectedVolumeFinalPass");
+	g_glslCmWorldToClip = glGetUniformLocation(glGlobShader.ID, "caneCmWorldToClip");
+	g_glslCmCameraPos = glGetUniformLocation(glGlobShader.ID, "caneCmCameraPos");
 	glslfAnimateUv       = glGetUniformLocation(glGlobShader.ID, "fAnimateUv");
 	glsluvOffsets		 = glGetUniformLocation(glGlobShader.ID, "uvOffsets");
 	glslUnSelfIllum		 = glGetUniformLocation(glGlobShader.ID, "unSelfIllum");
@@ -418,12 +608,38 @@ void GL::InitGL()
 
 	glUniform1i(glGetUniformLocation(glGlobShader.ID, "shadowTextureArray"), SHADOW_TEXTURE_UNIT);
 
+	// Vertex-SSBO fallback sampler units: warpState 4, bones 5, poseDpos 6,
+	// poseDnormal 7 (units 0..3 stay the material/shadow maps above).
+	if (g_fVertexUboFallback)
+	{
+		glUniform1i(glGetUniformLocation(glGlobShader.ID, "warpStateTex"), 4);
+		glUniform1i(glGetUniformLocation(glGlobShader.ID, "bonesTex"), 5);
+		glUniform1i(glGetUniformLocation(glGlobShader.ID, "poseDposTex"), 6);
+		glUniform1i(glGetUniformLocation(glGlobShader.ID, "poseDnormalTex"), 7);
+		glUniform1i(glGetUniformLocation(glGlobShader.ID, "lightTex"), 10);   // kLightTexUnit
+		glslCaneBake = glGetUniformLocation(glGlobShader.ID, "caneBake");
+		glUniform1i(glslCaneBake, 0);
+	}
+
 	glCelBorderShader.Init("celborder.vert", NULL, "celborder.frag");
 	rcbStream.bindIndex = 1;
 	align = 256;
 	glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
 
 	rcbStream.stride = (sizeof(ROCEL) + align - 1) & ~(align - 1);
+
+	// Vertex-SSBO fallback sampler units: edges 4, bones 5, edge bone
+	// indices 6, edge bone weights 7, edge pose deltas 8.
+	if (g_fVertexUboFallback)
+	{
+		glCelBorderShader.Use();
+		glUniform1i(glGetUniformLocation(glCelBorderShader.ID, "edgesTex"), 4);
+		glUniform1i(glGetUniformLocation(glCelBorderShader.ID, "bonesTex"), 5);
+		glUniform1i(glGetUniformLocation(glCelBorderShader.ID, "edgeBoneIdxTex"), 6);
+		glUniform1i(glGetUniformLocation(glCelBorderShader.ID, "edgeBoneWTex"), 7);
+		glUniform1i(glGetUniformLocation(glCelBorderShader.ID, "edgePoseTex"), 8);
+	}
+
 	glGeomShader.Init("geom.vert", NULL, "geom.frag");
 	glslGeomModelToClip = glGetUniformLocation(glGeomShader.ID, "modelToClip");
 	glslGeomDebugColor = glGetUniformLocation(glGeomShader.ID, "debugColor");
@@ -501,9 +717,11 @@ void GL::InitGL()
 
 	glslfPose       = glGetUniformLocation(glGlobShader.ID, "fPose");
 	glslPoseCount   = glGetUniformLocation(glGlobShader.ID, "poseCount");
+	glslPoseWeights = glGetUniformLocation(glGlobShader.ID, "poseWeights[0]");   // fallback only; -1 on desktop (SSBO)
 
 	glslCelPose        = glGetUniformLocation(glCelBorderShader.ID, "fPose");
 	glslCelPoseCount   = glGetUniformLocation(glCelBorderShader.ID, "poseCount");
+	glslCelPoseWeights = glGetUniformLocation(glCelBorderShader.ID, "poseWeights[0]");
 }
 
 void GL::CreateFramebuffers(int w, int h)
@@ -796,21 +1014,45 @@ void InitCameraUbo()
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, cmUBO);
 }
 
+// The camera block is rewritten several times per frame (world, TV portrait passes, debug overlays) while
+// earlier draws that used it are still queued. Writing the one shared buffer in place makes some drivers
+// (Adreno) show a later camera on earlier draws, so every update goes into the next buffer of a ring.
+void UpdateCmUbo(const void* data)
+{
+	// Respecify the whole block: the driver hands later draws fresh storage and leaves earlier ones alone.
+	glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
+	glBufferData(GL_UNIFORM_BUFFER, sizeof(CMGL), data, GL_DYNAMIC_DRAW);
+	glBindBufferBase(GL_UNIFORM_BUFFER, 0, cmUBO);
+	if (g_fVertexUboFallback && g_glslCmWorldToClip >= 0)
+	{
+		GLint prev = 0;
+		glGetIntegerv(GL_CURRENT_PROGRAM, &prev);
+		glUseProgram(glGlobShader.ID);
+		glUniformMatrix4fv(g_glslCmWorldToClip, 1, GL_FALSE, static_cast<const float*>(data));
+		if (g_glslCmCameraPos >= 0)
+			glUniform4fv(g_glslCmCameraPos, 1, static_cast<const float*>(data) + 16);
+		glUseProgram(static_cast<GLuint>(prev));
+	}
+}
+
 void InitFrameStream(STREAM* pstream, int streamSize)
 {
 	if (!pstream->fences)
 		pstream->fences = (GLsync*)calloc(g_frames, sizeof(GLsync));
 
-	if (pstream->bufferObject == 0)
-		glGenBuffers(1, &pstream->bufferObject);
-
-	glBindBuffer(GL_UNIFORM_BUFFER, pstream->bufferObject);
-
 	GLsizeiptr perFrameBytes = (GLsizeiptr)streamSize * pstream->stride;
-	GLsizeiptr totalSize = (GLsizeiptr)g_frames * perFrameBytes;
+	const int slots = (std::min)(g_frames, 8);
 
-	glBufferData(GL_UNIFORM_BUFFER, totalSize, nullptr, GL_STREAM_DRAW);
+	for (int i = 0; i < slots; ++i)
+	{
+		if (pstream->slotBuffers[i] == 0)
+			glGenBuffers(1, &pstream->slotBuffers[i]);
+		glBindBuffer(GL_UNIFORM_BUFFER, pstream->slotBuffers[i]);
+		glBufferData(GL_UNIFORM_BUFFER, perFrameBytes, nullptr, GL_STREAM_DRAW);
+	}
+	pstream->bufferObject = pstream->slotBuffers[0];
 
+	pstream->totalSize = perFrameBytes;
 	pstream->frameBase = 0;
 	pstream->cursor    = 0;
 	pstream->frameSize = perFrameBytes;
@@ -834,7 +1076,8 @@ void BeginFrameStream(STREAM* pstream)
 		pstream->fences[slot] = nullptr;
 	}
 
-	pstream->frameBase = (GLsizeiptr)slot * pstream->frameSize;
+	pstream->bufferObject = pstream->slotBuffers[slot % 8];
+	pstream->frameBase = 0;
 	pstream->cursor = 0;
 	pstream->mappedPtr = nullptr;
 	pstream->staging.resize(static_cast<size_t>(pstream->frameSize));
@@ -880,22 +1123,26 @@ void BindFrameStreamRange(STREAM* pstream, GLsizeiptr offset, int size)
 
 void AppendStream(STREAM* pstream, void* ptr, int size, int copySize)
 {
-	if (pstream->cursor + pstream->stride > pstream->frameSize)
+
+	// Mid-frame records go into a small private ring (see STREAM::appendBuffer). Writes to a buffer
+	// are ordered after the draws already queued, so wrapping the ring is safe.
+	if (pstream->appendBuffer == 0)
 	{
-		__debugbreak(); // overflow protection
-		return;
+		pstream->appendSize = pstream->stride * 128;
+		glGenBuffers(1, &pstream->appendBuffer);
+		glBindBuffer(GL_UNIFORM_BUFFER, pstream->appendBuffer);
+		glBufferData(GL_UNIFORM_BUFFER, pstream->appendSize, nullptr, GL_STREAM_DRAW);
+		pstream->appendCursor = 0;
 	}
+	if (pstream->appendCursor + pstream->stride > pstream->appendSize)
+		pstream->appendCursor = 0;
 
-	GLsizeiptr off = pstream->frameBase + pstream->cursor;
-	pstream->cursor += pstream->stride;
+	const GLsizeiptr off = pstream->appendCursor;
+	pstream->appendCursor += pstream->stride;
 
-	// A non-persistently mapped buffer cannot legally be consumed by draw calls
-	// until it is unmapped. The old path kept this UBO mapped for the complete
-	// render pass; NVIDIA tolerated that, while AMD could observe stale or
-	// partially written object transforms. Upload each aligned range normally.
-	glBindBuffer(GL_UNIFORM_BUFFER, pstream->bufferObject);
+	glBindBuffer(GL_UNIFORM_BUFFER, pstream->appendBuffer);
 	glBufferSubData(GL_UNIFORM_BUFFER, off, copySize, ptr);
-	glBindBufferRange(GL_UNIFORM_BUFFER, pstream->bindIndex, pstream->bufferObject, off, size);
+	glBindBufferRange(GL_UNIFORM_BUFFER, pstream->bindIndex, pstream->appendBuffer, off, size);
 }
 
 void EndFrameStream(STREAM* pstream)
@@ -910,6 +1157,11 @@ void EndFrameStream(STREAM* pstream)
 
 void DeleteFrameStream(STREAM* pstream)
 {
+	if (pstream->appendBuffer != 0)
+	{
+		glDeleteBuffers(1, &pstream->appendBuffer);
+		pstream->appendBuffer = 0;
+	}
 	if (pstream->fences)
 	{
 		for (int i = 0; i < g_frames; i++)
@@ -932,7 +1184,14 @@ void DeleteFrameStream(STREAM* pstream)
 			pstream->mappedPtr = nullptr;
 		}
 
-		glDeleteBuffers(1, &pstream->bufferObject);
+		for (int i = 0; i < 8; ++i)
+		{
+			if (pstream->slotBuffers[i])
+			{
+				glDeleteBuffers(1, &pstream->slotBuffers[i]);
+				pstream->slotBuffers[i] = 0;
+			}
+		}
 		pstream->bufferObject = 0;
 	}
 
@@ -1330,6 +1589,8 @@ GLuint glslAlphaCutOff = 0;
 GLuint glslRko = 0;
 GLuint glslProjectedVolumeColor = 0;
 GLuint glslProjectedVolumeFinalPass = 0;
+GLint g_glslCmWorldToClip = -1;
+GLint g_glslCmCameraPos = -1;
 GLuint glslfAnimateUv = 0;
 GLuint glsluvOffsets = 0;
 GLuint glslUnSelfIllum = 0;
@@ -1367,8 +1628,11 @@ float s_dyDisplayOriginal;
 GLuint lineVao = 0;
 GLuint lineVbo = 0;
 GLuint glslfSkin = 0;
+GLuint glslCaneBake = 0;
 GLint glslCelSkin = 0;
 GLuint glslfPose = 0;
 GLuint glslPoseCount = 0;
+GLuint glslPoseWeights = 0;
 GLuint glslCelPose = 0;
 GLuint glslCelPoseCount = 0;
+GLuint glslCelPoseWeights = 0;

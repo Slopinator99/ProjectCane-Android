@@ -1,13 +1,47 @@
 #include "light.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#include <chrono>
+#endif
 #include "tv.h"
 #include <algorithm>
+#include <limits>
+#include <cstring>
 #include "render.h"
+
+extern std::vector <LIGHTBLK> lightBlk;
+static std::vector<unsigned char> s_lightRowDirty;
+static_assert(sizeof(LIGHTBLK) % 16 == 0, "a light must be a whole number of RGBA32I texels");
+constexpr int kLightTexW = static_cast<int>(sizeof(LIGHTBLK) / 16);
+
+static void UploadLightRowTexture(int idx)
+{
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, idx, kLightTexW, 1, GL_RGBA_INTEGER, GL_INT, &lightBlk[idx]);
+}
+
 
 // Stable correspondence between a LIGHT object and its slot in lightBlk/the
 // GPU SSBO. SW::dlLight is mutable, so its traversal index cannot be used as
 // an SSBO index after a light is removed.
 static std::vector<LIGHT*> s_lightSlotOwners;
 static void UpdateLightGpuSlot(LIGHT* plight);
+
+// §8.1 fallback (glob.h): std140 image of ACTIVELIGHTS for its uniform-block
+// declaration in glob.vert — int numStaticLights @0, ivec4 staticLightIdx4[64]
+// @16, int numDynamicLights @1040, ivec4 dynamicLightIdx4[64] @1056.
+static constexpr size_t kActiveLights140Size = 2080;
+static void PackActiveLightsStd140(unsigned char* out)
+{
+	std::memset(out, 0, kActiveLights140Size);
+	std::memcpy(out + 0, &activeLights.numStaticLights, sizeof(int));
+	const int numStatic = (std::min)(activeLights.numStaticLights, MAX_LIGHTS);
+	for (int i = 0; i < numStatic; ++i)
+		std::memcpy(out + 16 + i * 4, &activeLights.staticLightIndices[i], sizeof(int));
+	std::memcpy(out + 1040, &activeLights.numDynamicLights, sizeof(int));
+	const int numDynamic = (std::min)(activeLights.numDynamicLights, MAX_LIGHTS);
+	for (int i = 0; i < numDynamic; ++i)
+		std::memcpy(out + 1056 + i * 4, &activeLights.dynamicLightIndices[i], sizeof(int));
+}
 
 LIGHT* NewLight()
 {
@@ -680,6 +714,13 @@ static void UpdateLightGpuSlot(LIGHT* plight)
 
 	BuildLightBlk(plight, &lightBlk[idx]);
 
+	if (g_fVertexUboFallback)
+	{
+		if (idx < static_cast<int>(s_lightRowDirty.size()))
+			s_lightRowDirty[idx] = 1;
+		return;
+	}
+
 	const GLsizeiptr offset = sizeof(LightSSBOHeader) +
 		static_cast<GLsizeiptr>(sizeof(LIGHTBLK)) * idx;
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, g_lightSsbo);
@@ -710,32 +751,64 @@ void AllocateLightBlkList()
 	}
 
 	// ------------------------------------------------------------
-	// Main light SSBO
+	// Main light SSBO (uniform block in the §8.1 fallback)
 	// ------------------------------------------------------------
 	glGenBuffers(1, &g_lightSsbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, g_lightSsbo);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, g_lightSsbo);
+	glBindBufferBase(g_fVertexUboFallback ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER,
+		2, g_lightSsbo);
 
 	const GLsizeiptr headerSize = sizeof(LightSSBOHeader);
 	const GLsizeiptr lightsSize = sizeof(LIGHTBLK) * lightBlk.size();
 	const GLsizeiptr totalSize = headerSize + lightsSize;
+	// The fallback declares LIGHT lights[MAX_LIGHTS] (constant UBO size), so
+	// the buffer must cover the whole declared block, not just the uploads.
+	// Fallback: the uniform block holds only numLights; the lights live in g_lightTex.
+	const GLsizeiptr allocSize = g_fVertexUboFallback ? (std::max)(headerSize, (GLsizeiptr)16) : totalSize;
 
-	glBufferData(GL_SHADER_STORAGE_BUFFER, totalSize, nullptr, GL_DYNAMIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, allocSize, nullptr, GL_DYNAMIC_DRAW);
 
 	LightSSBOHeader header = {};
 	header.numLights = (int)lightBlk.size();
 
 	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, headerSize, &header);
-	glBufferSubData(GL_SHADER_STORAGE_BUFFER, headerSize, lightsSize, lightBlk.data());
+	if (g_fVertexUboFallback)
+	{
+		if (g_lightTex != 0)
+			glDeleteTextures(1, &g_lightTex);
+		glGenTextures(1, &g_lightTex);
+		glActiveTexture(GL_TEXTURE0 + kLightTexUnit);
+		glBindTexture(GL_TEXTURE_2D, g_lightTex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32I, kLightTexW, MAX_LIGHTS, 0, GL_RGBA_INTEGER, GL_INT, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		const int rows = static_cast<int>((std::min<size_t>)(lightBlk.size(), MAX_LIGHTS));
+		if (rows > 0)
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kLightTexW, rows, GL_RGBA_INTEGER, GL_INT, lightBlk.data());
+		glActiveTexture(GL_TEXTURE0);
+		s_lightRowDirty.assign(lightBlk.size(), 0);
+	}
+	else
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, headerSize, lightsSize, lightBlk.data());
 
 	// ------------------------------------------------------------
-	// Active-lights SSBO
+	// Active-lights SSBO (std140 image in the §8.1 fallback)
 	// ------------------------------------------------------------
 	glGenBuffers(1, &g_activeLightsSsbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, g_activeLightsSsbo);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, g_activeLightsSsbo);
+	glBindBufferBase(g_fVertexUboFallback ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER,
+		3, g_activeLightsSsbo);
 
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(ACTIVELIGHTS), &activeLights, GL_DYNAMIC_DRAW);
+	if (g_fVertexUboFallback)
+	{
+		unsigned char packed[kActiveLights140Size];
+		PackActiveLightsStd140(packed);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(packed), packed, GL_DYNAMIC_DRAW);
+	}
+	else
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(ACTIVELIGHTS), &activeLights, GL_DYNAMIC_DRAW);
 
 	// TV portraits have their own isolated light domain. Both persistent TV
 	// lights are addressed directly by the portrait glob, so no active-index
@@ -745,7 +818,8 @@ void AllocateLightBlkList()
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LIGHTBLK) * 2, nullptr, GL_DYNAMIC_DRAW);
 	// Binding 12 belongs to the cel-border pose stream and is replaced while
 	// drawing posed outlines. Keep persistent TV lighting on its own binding.
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, g_tvLightSsbo);
+	glBindBufferBase(g_fVertexUboFallback ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER,
+		13, g_tvLightSsbo);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -847,6 +921,28 @@ void PrepareSwLights(SW *psw, CM *pcm)
 	activeLights.numStaticLights  = 0;
 	activeLights.numDynamicLights = 0;
 
+	// Fallback: changed light rows are collected here and uploaded with ONE call. Uploading each
+	// row separately made the driver duplicate the whole (in-use) light texture per call -- that
+	// copying was over half of the game thread's CPU time.
+	int rowMin = (std::numeric_limits<int>::max)();
+	int rowMax = -1;
+
+	if (g_fVertexUboFallback && g_lightTex != 0)
+	{
+		// DrawSw invalidated the texture-state cache just before this, so switching units here is safe.
+		glActiveTexture(GL_TEXTURE0 + kLightTexUnit);
+		glBindTexture(GL_TEXTURE_2D, g_lightTex);
+		for (size_t i = 0; i < s_lightRowDirty.size() && i < static_cast<size_t>(MAX_LIGHTS); ++i)
+		{
+			if (s_lightRowDirty[i])
+			{
+				rowMin = (std::min)(rowMin, static_cast<int>(i));
+				rowMax = (std::max)(rowMax, static_cast<int>(i));
+				s_lightRowDirty[i] = 0;
+			}
+		}
+	}
+
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, g_lightSsbo);
 
 	for (LIGHT* plight = psw->dlLight.plightFirst; plight; plight = plight->dleLight.plightNext)
@@ -872,7 +968,13 @@ void PrepareSwLights(SW *psw, CM *pcm)
 				// from the live LIGHT instead of uploading its load-time snapshot.
 				BuildLightBlk(plight, &lightBlk[idx]);
 				activeLights.dynamicLightIndices[activeLights.numDynamicLights++] = idx;
-				glBufferSubData(GL_SHADER_STORAGE_BUFFER, headerSize + (GLintptr)(sizeof(LIGHTBLK) * idx), sizeof(LIGHTBLK), &lightBlk[idx]);
+				if (g_fVertexUboFallback && g_lightTex != 0)
+				{
+					rowMin = (std::min)(rowMin, idx);
+					rowMax = (std::max)(rowMax, idx);
+				}
+				else
+					glBufferSubData(GL_SHADER_STORAGE_BUFFER, headerSize + (GLintptr)(sizeof(LIGHTBLK) * idx), sizeof(LIGHTBLK), &lightBlk[idx]);
 			}
 		}
 		else
@@ -884,9 +986,24 @@ void PrepareSwLights(SW *psw, CM *pcm)
 	}
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, g_activeLightsSsbo);
-	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(ACTIVELIGHTS), &activeLights);
+	if (g_fVertexUboFallback)
+	{
+		unsigned char packed[kActiveLights140Size];
+		PackActiveLightsStd140(packed);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(packed), packed);
+	}
+	else
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(ACTIVELIGHTS), &activeLights);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	if (g_fVertexUboFallback && g_lightTex != 0)
+	{
+		if (rowMax >= rowMin && rowMin >= 0 && rowMax < static_cast<int>(lightBlk.size()))
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, rowMin, kLightTexW, rowMax - rowMin + 1,
+				GL_RGBA_INTEGER, GL_INT, &lightBlk[rowMin]);
+		glActiveTexture(GL_TEXTURE0);
+	}
 }
 
 void UpdateTvLightGpu(LIGHT* plight, int iTvLight)
@@ -921,6 +1038,11 @@ void DeallocateLightBlkList()
 	s_lightSlotOwners.shrink_to_fit();
 	numSwLights = 0;
 
+	if (g_lightTex != 0)
+		glDeleteTextures(1, &g_lightTex);
+	g_lightTex = 0;
+	s_lightRowDirty.clear();
+
 	glDeleteBuffers(1, &g_lightSsbo);
 	glDeleteBuffers(1, &g_activeLightsSsbo);
 	glDeleteBuffers(1, &g_tvLightSsbo);
@@ -946,6 +1068,7 @@ std::vector <LIGHT*> allSwLights;
 std::vector<LIGHT*> allSwDynamicLights;
 ACTIVELIGHTS activeLights;
 GLuint g_lightSsbo;
+GLuint g_lightTex = 0;
 GLuint g_activeLightsSsbo;
 GLuint g_tvLightSsbo;
 int numSwLights;
@@ -960,3 +1083,96 @@ glm::vec3 s_vecDirectionDefault = glm::vec3(-0.2, 0.3, -1.0);
 LM s_lmFallOffDefault{500, 2500};
 glm::vec3 s_posDefault = glm::vec3(100, -150, 500);
 GRFDFL g_grfdfl = 1;
+
+int BuildRelightList(const glm::vec3& center, float radius, int32_t* out, int cap)
+{
+	const int count = static_cast<int>(std::min<size_t>(lightBlk.size(), MAX_LIGHTS));
+	int n = 0;
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	static int s_calls = 0, s_overflow = 0, s_sumN = 0, s_active = 0, s_pos = 0, s_dir = 0, s_other = 0;
+	static auto s_last = std::chrono::steady_clock::now();
+	++s_calls;
+	if (std::chrono::duration<double>(std::chrono::steady_clock::now() - s_last).count() >= 1.0)
+	{
+		s_last = std::chrono::steady_clock::now();
+		int active = 0, pos = 0, dir = 0, other = 0;
+		for (int i = 0; i < count; ++i)
+		{
+			const LIGHTBLK& L = lightBlk[i];
+			if (L.fActive == 0 || L.fDynamic != 0) continue;
+			++active;
+			if (L.lightk == LIGHTK_Position) ++pos; else if (L.lightk == LIGHTK_Direction) ++dir; else ++other;
+		}
+		__android_log_print(ANDROID_LOG_INFO, "cane", "[Relight] tableLights=%d staticActive=%d (dir=%d pos=%d frustum/spot=%d); last second: calls=%d overflow=%d avgListLen=%.1f",
+			count, active, dir, pos, other, s_calls, s_overflow, s_calls > s_overflow ? (double)s_sumN / (s_calls - s_overflow) : 0.0);
+		s_calls = s_overflow = s_sumN = 0;
+	}
+#endif
+
+	for (int i = 0; i < count; ++i)
+	{
+		const LIGHTBLK& L = lightBlk[i];
+
+		// Same skips as the shader's static relight loop.
+		if (L.fActive == 0 || L.fDynamic != 0)
+			continue;
+
+		if (L.lightk == LIGHTK_Position)
+		{
+			// Exact copy of SphereIntersectsPositionLight: others cannot contribute.
+			const glm::vec3 d = glm::vec3(L.pos) - center;
+			const float maxDist = L.dst + radius;
+			if (glm::dot(d, d) > maxDist * maxDist)
+				continue;
+		}
+		// Directional lights always contribute; frustum/spot lights are kept (the shader's
+		// exact frustum test still runs on them).
+
+		if (n >= cap)
+		{
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+			++s_overflow;
+#endif
+			return -1;
+		}
+
+		out[n++] = i;
+	}
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+	s_sumN += n;
+#endif
+
+	return n;
+}
+
+int BuildActiveLightList(int kind, const glm::vec3& center, float radius, int32_t* out, int cap)
+{
+	const int total = kind == 1 ? activeLights.numStaticLights : activeLights.numDynamicLights;
+	const int* src = kind == 1 ? activeLights.staticLightIndices : activeLights.dynamicLightIndices;
+	const int tableCount = static_cast<int>((std::min<size_t>)(lightBlk.size(), MAX_LIGHTS));
+	int n = 0;
+
+	for (int k = 0; k < total && k < MAX_LIGHTS; ++k)
+	{
+		const int idx = src[k];
+		if (idx < 0 || idx >= tableCount)
+			continue;
+
+		const LIGHTBLK& L = lightBlk[idx];
+		if (L.lightk == LIGHTK_Position)
+		{
+			// Same test as the shader's SphereIntersectsPositionLight.
+			const glm::vec3 d = glm::vec3(L.pos) - center;
+			const float maxDist = L.dst + radius;
+			if (glm::dot(d, d) > maxDist * maxDist)
+				continue;
+		}
+
+		if (n >= cap)
+			return -1;
+
+		out[n++] = idx;
+	}
+
+	return n;
+}

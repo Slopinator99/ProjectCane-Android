@@ -1,0 +1,100 @@
+name: Android
+
+on:
+  push:
+    branches: [android, main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 26.3.11579264
+
+jobs:
+  # Fast gate (~3 min): catches upstream changes that break the ES/ARM64 port.
+  portability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build libsdl2-dev libgles-dev libegl-dev libglm-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libfaudio-dev \
+            g++-aarch64-linux-gnu libgl1-mesa-dri libegl-mesa0 mesa-libgallium
+      - name: Shader (GLES 3.2) + AArch64 checks
+        run: scripts/ci/check-host.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: portability-logs, path: build-ci/aarch64-errors.txt, if-no-files-found: ignore }
+
+  apk:
+    needs: portability
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK + CMake
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+
+      - name: Fetch SDL2
+        run: android/scripts/setup-android.sh
+
+      - name: Cache FFmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: android/third_party/ffmpeg
+          key: ffmpeg-n7.1-arm64-api29-${{ hashFiles('scripts/ci/build-ffmpeg-android.sh') }}
+      - name: Build FFmpeg (arm64, minimal)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: scripts/ci/build-ffmpeg-android.sh
+
+      - name: Version
+        run: |
+          echo "CANE_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "CANE_VERSION_NAME=0.4.0+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Decode release keystore (if configured)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.ANDROID_KEYSTORE_B64 != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "CANE_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "CANE_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "CANE_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "CANE_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: android
+        run: gradle :app:assembleRelease --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectCane-android-apk
+          path: android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/release/*.apk
+          generate_release_notes: true

@@ -11,10 +11,25 @@ uniform mat4 model;
 uniform mat4 matWorldToClip; 
 uniform int fSkin;
 
+#ifdef CANE_VERTEX_UBO_FALLBACK
+// §8.1 vertex-SSBO fallback: bone matrices are a 4-wide data texture (unit 5,
+// fixed in gl.cpp); textureSize().y is the exact matrix count.
+uniform sampler2D bonesTex;
+
+#define BONE_AT(i)      mat4(texelFetch(bonesTex, ivec2(0, int(i)), 0), \
+                             texelFetch(bonesTex, ivec2(1, int(i)), 0), \
+                             texelFetch(bonesTex, ivec2(2, int(i)), 0), \
+                             texelFetch(bonesTex, ivec2(3, int(i)), 0))
+#define BONE_LEN        (textureSize(bonesTex, 0).y)
+#else
 layout(std430, binding = 9) readonly buffer BONEBLK
 {
     mat4 boneMatrices[];
 };
+
+#define BONE_AT(i)      (boneMatrices[(i)])
+#define BONE_LEN        (boneMatrices.length())
+#endif
 
 layout(location = 0) out vec4 vertexColor;
 
@@ -28,29 +43,29 @@ void main()
     {
         mat4 matSkin = mat4(0.0);
         float totalWeight = 0.0;
-        int boneCount = boneMatrices.length();
+        int boneCount = BONE_LEN;
 
         if (boneWeights.x != 0.0 && boneIndices.x < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.x] * boneWeights.x;
+            matSkin += BONE_AT(boneIndices.x) * boneWeights.x;
             totalWeight += boneWeights.x;
         }
 
         if (boneWeights.y != 0.0 && boneIndices.y < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.y] * boneWeights.y;
+            matSkin += BONE_AT(boneIndices.y) * boneWeights.y;
             totalWeight += boneWeights.y;
         }
 
         if (boneWeights.z != 0.0 && boneIndices.z < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.z] * boneWeights.z;
+            matSkin += BONE_AT(boneIndices.z) * boneWeights.z;
             totalWeight += boneWeights.z;
         }
 
         if (boneWeights.w != 0.0 && boneIndices.w < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.w] * boneWeights.w;
+            matSkin += BONE_AT(boneIndices.w) * boneWeights.w;
             totalWeight += boneWeights.w;
         }
 

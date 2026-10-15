@@ -7,7 +7,11 @@
 #define FOG_PS3  2
 
 #define MAX_OBJECT_SHADOWS 12
+#define MAX_SHADOWS 255
 
+#ifdef CANE_DIAG_SHADER
+uniform int caneFrag;   // debug: 1 = skip per-pixel shadow loops, 2 = flat colour (skip all fragment work)
+#endif
 uniform sampler2D ambientMap;
 uniform sampler2D diffuseMap;
 uniform sampler2D saturateMap;
@@ -71,14 +75,26 @@ layout(std140, binding = 1) uniform RO
     int   fDynamicLight;
     int   trlk;
     vec4  posCenter;
+    ivec4 relightHdr;     // must match glob.vert's RO block (vertex-stage use only)
+    ivec4 relightIdx[7];
 } op;
 
+#ifdef CANE_VERTEX_UBO_FALLBACK
+// §8.1: the shadow table is a uniform block here too (same binding 4, same
+// std140 CPU layout as the vertex stage).
+layout(std140, binding = 4) uniform SHADOWBLK
+{
+    int numLevelShadows;
+    SHADOW shadows[MAX_SHADOWS];
+};
+#else
 layout(std430, binding = 4) readonly buffer SHADOWBLK
 {
     int numLevelShadows;
     int padShadowBlk[3];
     SHADOW shadows[];
 };
+#endif
 
 uniform int   fAlphaTest;
 uniform float alphaCutOff;
@@ -86,15 +102,29 @@ uniform int   rko;
 uniform vec4  projectedVolumeColor;
 uniform int   projectedVolumeFinalPass;
 
-layout(location = 0) in vec4 worldPos;
-layout(location = 1) in vec3 worldNormal;
-layout(location = 2) in vec4 vertexColor;
-layout(location = 3) in vec2 texcoord;
+// See glob.vert: on GL_ES the varyings link by name and MATERIAL is rebuilt from three plain inputs.
+#ifdef GL_ES
+#define V_LOC(n)
+#else
+#define V_LOC(n) layout(location = n)
+#endif
 
+V_LOC(0) in vec4 worldPos;
+V_LOC(1) in vec3 worldNormal;
+V_LOC(2) in vec4 vertexColor;
+V_LOC(3) in vec2 texcoord;
+
+#ifdef GL_ES
+in float vMatAmbient;
+in vec4  vMatMidtone;
+in vec4  vMatLight;
+MATERIAL material;
+#else
 layout(location = 4) in MATERIAL material;
-layout(location = 7) flat in int vShadowCount;
-layout(location = 8) flat in ivec4 vShadowIndices[3];
-layout(location = 11) in float fogIntensity;
+#endif
+V_LOC(7) flat in int vShadowCount;
+V_LOC(8) flat in ivec4 vShadowIndices[3];
+V_LOC(11) in float fogIntensity;
 
 layout(location = 0) out vec4 FragColor;
 
@@ -105,6 +135,15 @@ bool ShadowIntersectsSphere(vec3 objectCenter, float objectRadius, vec3 shadowCe
 vec3 ApplyProjectedShadow(SHADOW shadow);
 float SampleShadowTexture(SHADOW shadow, vec2 uv);
 void ApplyFog();
+
+bool ShadowLoopOn()
+{
+#ifdef CANE_DIAG_SHADER
+    return (caneFrag & 1) == 0;
+#else
+    return true;
+#endif
+}
 
 int ObjectShadowIndex(int slot)
 {
@@ -118,6 +157,12 @@ int AvailableShadowCount()
 
 void main()
 {
+#ifdef GL_ES
+    material = MATERIAL(vMatAmbient, vMatMidtone, vMatLight);
+#endif
+#ifdef CANE_DIAG_SHADER
+    if ((caneFrag & 2) != 0) { FragColor = vec4(vertexColor.rgb, 1.0); return; }
+#endif
     if (fAlphaTest == 1)
         AlphaTest();
 
@@ -172,7 +217,7 @@ void DrawOneWay()
 
     float alpha = diffuseTex.a * vertexColor.a * projectedVolumeColor.a;
 
-    if (alpha > 0.9)
+    if (alpha > 0.9 && ShadowLoopOn())
     {
         int shadowCount = clamp(vShadowCount, 0, MAX_OBJECT_SHADOWS);
         for (int i = 0; i < shadowCount; ++i)
@@ -196,7 +241,7 @@ void DrawThreeWay()
     vec3  lit = ambientTex.rgb * material.ambient + diffuseTex.rgb * material.midtone.rgb + saturateTex.rgb * material.light.rgb;
     float alpha = clamp(vertexColor.a * diffuseTex.a, 0.0, 1.0);
 
-    if (alpha > 0.9)
+    if (alpha > 0.9 && ShadowLoopOn())
     {
         int shadowCount = clamp(vShadowCount, 0, MAX_OBJECT_SHADOWS);
         for (int i = 0; i < shadowCount; ++i)

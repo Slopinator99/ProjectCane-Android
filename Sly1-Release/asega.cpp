@@ -1,4 +1,7 @@
 #include "asega.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#endif
 #include "actseg.h"
 #include "acp.h"
 #include "sm.h"
@@ -644,7 +647,13 @@ void HandleAsegaEvent(ASEGA* pasega, EA* pea, int* pfRetracted)
                 PloFindSwObject(psw, 260, static_cast<OID>(pea->setsm.oidRoot), paloRoot));
 
             if (!psm || !palo)
+            {
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+                __android_log_print(ANDROID_LOG_WARN, "cane", "[SetSmGoal] missing target: sm=%d root=%d state=%d psm=%p palo=%p",
+                    (int)pea->setsm.oidSm, (int)pea->setsm.oidRoot, (int)pea->setsm.oidState, (void*)psm, (void*)palo);
+#endif
                 break;
+            }
 
             SMA* psma = PsmaFindSm(psm, palo);
 

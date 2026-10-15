@@ -53,6 +53,12 @@ struct LIGHTBLK
 	glm::vec4 falloffBias;
 };
 
+// Fallback (no vertex SSBO) path: indices of the static, non-dynamic, active lights whose reach
+// includes the given sphere. Returns the count, or -1 if more than `cap` lights qualify.
+int BuildRelightList(const glm::vec3& center, float radius, int32_t* out, int cap);
+// Same idea for the camera-zone active lists used by moving objects (kind 1 = static, 2 = dynamic).
+int BuildActiveLightList(int kind, const glm::vec3& center, float radius, int32_t* out, int cap);
+
 struct ACTIVELIGHTS
 {
 	int numStaticLights;
@@ -156,6 +162,10 @@ extern std::vector<LIGHT*> allSwLights;
 extern std::vector<LIGHT*> allSwDynamicLights;
 extern ACTIVELIGHTS activeLights;
 extern GLuint g_lightSsbo;
+// Fallback only: the level light table as a data texture (13 RGBA32I texels per light, one light per
+// row) on texture unit 10 -- see glob.vert FetchLight for why it is not a uniform block.
+extern GLuint g_lightTex;
+constexpr int kLightTexUnit = 10;
 extern GLuint g_activeLightsSsbo;
 extern GLuint g_tvLightSsbo;
 extern int numSwLights;

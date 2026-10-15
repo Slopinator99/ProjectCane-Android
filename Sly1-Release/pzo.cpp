@@ -8,6 +8,9 @@
 #include "emitter.h"
 #include "expl.h"
 #include "smack.h"
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+#include <android/log.h>
+#endif
 #include "steppower.h"
 #include "xform.h"
 #include <cstdio>
@@ -327,6 +330,20 @@ void UpdateVaultActive(VAULT* pvault, JOY* pjoy, float dt)
 
 		const int dx = pjoy->DxSelectionJoy(g_clock.tReal);
 		const int dy = pjoy->DySelectionJoy(g_clock.tReal);
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+		{
+			static OID s_lastCur = OID_Nil, s_lastGoal = OID_Nil;
+			if (dx != 0 || dy != 0 || oidCur != s_lastCur || oidGoal != s_lastGoal)
+			{
+				s_lastCur = oidCur; s_lastGoal = oidGoal;
+				OID d[3] = { OID_Nil, OID_Nil, OID_Nil };
+				for (int i = 0; i < 3; ++i)
+					if (pvault->atmbl[i].psmaDial != nullptr) GetSmaCur(pvault->atmbl[i].psmaDial, &d[i]);
+				__android_log_print(ANDROID_LOG_INFO, "cane", "[Vault] cur=%d goal=%d dx=%d dy=%d dials=%d,%d,%d",
+					(int)oidCur, (int)oidGoal, dx, dy, (int)d[0], (int)d[1], (int)d[2]);
+			}
+		}
+#endif
 
 		if (dx < 0)
 			selection = 1;

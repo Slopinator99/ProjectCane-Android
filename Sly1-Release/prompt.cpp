@@ -20,6 +20,12 @@
 #include <cstdio>
 #include <iterator>
 #include <vector>
+#ifdef __ANDROID__
+extern "C" int cane_android_has_hw_keyboard();
+extern "C" void cane_android_open_saves_screen();
+extern "C" const char* cane_touch_label(int which, char* buf, int size);
+extern "C" void cane_touch_cycle(int which);
+#endif
 
 namespace
 {
@@ -86,6 +92,17 @@ int GamepadBindingPressed()
     if (state.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.25f)
         return GAMEPAD_BINDING_RIGHT_TRIGGER;
     return -1;
+}
+
+// Android has no window mode, VSync or mouse, and a hardware keyboard is the exception, so the options that only
+// make sense there stay out of the menus.
+static bool FKeyboardAvailable()
+{
+#ifdef __ANDROID__
+    return cane_android_has_hw_keyboard() != 0;
+#else
+    return true;
+#endif
 }
 
 bool FGamepadAvailable()
@@ -577,6 +594,10 @@ void SetPromptPrk(PROMPT* pprompt)
                 include = g_ui.uisPlaying == UIS_Attract;
             else if (response == RESPK_SaveGame)
                 include = g_ui.uisPlaying != UIS_Attract;
+#ifndef __ANDROID__
+            else if (response == RESPK_BackupSaves)
+                include = false;
+#endif
 
             if (include &&prd.crespk < static_cast<int>(std::size(s_arespkOptionsMenu)))
                 prd.arespk[prd.crespk++] = response;
@@ -594,6 +615,32 @@ void SetPromptPrk(PROMPT* pprompt)
 		{
 			if (response == RESPK_ControllerMapping && !gamepadAvailable)
 				continue;
+#ifndef __ANDROID__
+			if (response == RESPK_TouchMode || response == RESPK_TouchOpacity || response == RESPK_TouchSize || response == RESPK_TouchEdit)
+				continue;
+#endif
+#ifdef __ANDROID__
+			if (response == RESPK_MouseCamera || response == RESPK_DisableControllerWhenUnfocused)
+				continue;
+			if (response == RESPK_KeyboardMapping && !FKeyboardAvailable())
+				continue;
+#endif
+			prd.arespk[prd.crespk++] = response;
+		}
+	}
+
+	else if (prk == PRK_VideoMenu)
+	{
+		PRD& prd = s_mpprkprd[PRK_VideoMenu];
+		prd.arespk = s_arespkVideoMenu;
+		prd.crespk = 0;
+
+		for (RESPK response : s_arespkVideoMenuAll)
+		{
+#ifdef __ANDROID__
+			if (response == RESPK_WindowMode || response == RESPK_Vsync)
+				continue;
+#endif
 			prd.arespk[prd.crespk++] = response;
 		}
 	}
@@ -722,6 +769,11 @@ void SetPromptPrk(PROMPT* pprompt)
     else if (g_gl.aspectMode == PS2_16_9)
         aspectRatioName = "16:9 (PS2)";
     std::snprintf(g_achzRespk35, sizeof(g_achzRespk35), "Aspect Ratio: %s", aspectRatioName);
+#ifdef __ANDROID__
+    cane_touch_label(0, g_achzRespkTouchMode, sizeof(g_achzRespkTouchMode));
+    cane_touch_label(1, g_achzRespkTouchOpacity, sizeof(g_achzRespkTouchOpacity));
+    cane_touch_label(2, g_achzRespkTouchSize, sizeof(g_achzRespkTouchSize));
+#endif
     std::snprintf(g_achzRespk40, sizeof(g_achzRespk40), "GUI Scale: %d%%",
         static_cast<int>(std::lround(g_guiScale * 100.0f)));
     std::snprintf(g_achzRespk60, sizeof(g_achzRespk60), "GUI Style: %s",
@@ -1566,6 +1618,11 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
                 SetPrompt(pprompt, PRP_Basic, PRK_VideoMenu);
                 return;
 
+#ifdef __ANDROID__
+                case RESPK_BackupSaves:
+                cane_android_open_saves_screen();
+                return;
+#endif
 				case RESPK_AutoIconify:
 				ApplyAutoIconifySettings(!g_fAutoIconify);
 				SaveSystemSettings();
@@ -1631,6 +1688,18 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
 			SaveSystemSettings();
 			break;
 
+#ifdef __ANDROID__
+			case RESPK_TouchMode:
+			case RESPK_TouchOpacity:
+			case RESPK_TouchSize:
+			cane_touch_cycle(response == RESPK_TouchMode ? 0 : response == RESPK_TouchOpacity ? 1 : 2);
+			rebuildPromptKeepingSelection();
+			return;
+
+			case RESPK_TouchEdit:
+			cane_touch_cycle(3);
+			return;
+#endif
 			case RESPK_MouseSensitivity:
 			g_mouseCameraSensitivity = std::clamp(
 				g_mouseCameraSensitivity + (direction < 0 ? -0.25f : 0.25f),

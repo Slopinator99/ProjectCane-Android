@@ -1,3 +1,4 @@
+#include <android/log.h>
 #include "tv.h"
 #include "light.h"
 #include "binoc.h"
@@ -623,8 +624,7 @@ static void RestoreTvContextState(bool clearStencil)
         SetCmFov(g_pcm, s_radTvFovSaved);
         g_pcm->radFOVTarget = s_radTvFovTargetSaved;
         g_pcm->svRadFOV = s_svTvFovSaved;
-        glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CMGL), &g_pcm->matWorldToClip);
+        UpdateCmUbo(&g_pcm->matWorldToClip);
     }
 
     s_fTvCameraSaved = false;
@@ -682,8 +682,10 @@ void PreTvContext(RPL* prpl)
     // Keep the authored projection so the screen-space anchor remains fixed.
     // RenderTv compensates the model's local X scale for the host aspect.
     SetTvCameraFov(g_pcm, ptv->pspeakerDraw->radFov, 1280.0f / 720.0f);
-    glBindBuffer(GL_UNIFORM_BUFFER, cmUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CMGL), &g_pcm->matWorldToClip);
+#if defined(__ANDROID__) && defined(CANE_DIAG)
+    __android_log_print(ANDROID_LOG_INFO, "cane", "[TV] PreTvContext frame=%d", g_cframe);
+#endif
+    UpdateCmUbo(&g_pcm->matWorldToClip);
 
     glEnable(GL_SCISSOR_TEST);
     glScissor(scissorX, scissorY, scissorWidth, scissorHeight);
@@ -1175,8 +1177,14 @@ void DrawTvBands(TV* ptv)
         GLfloat pointSizePrevious = 1.0f;
         glGetFloatv(GL_POINT_SIZE, &pointSizePrevious);
         glPointSize(std::max(1.0f, TvUiScale()));
+#ifdef CANE_GLES
+        glUniform1f(glGetUniformLocation(glBlotShader.ID, "u_pointSize"), std::max(1.0f, TvUiScale()));
+#endif
         glDrawArrays(GL_POINTS, 0, distortionPointCount);
         glPointSize(pointSizePrevious);
+#ifdef CANE_GLES
+        glUniform1f(glGetUniformLocation(glBlotShader.ID, "u_pointSize"), pointSizePrevious);
+#endif
     }
 
     glBindVertexArray(0);

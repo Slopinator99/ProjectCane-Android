@@ -39,7 +39,28 @@ compile_commands.json
 Sly1-Release/*.csv
 Sly1-Release/*.dll
 
-# Extracted game data
+# Extracted game data (never commit or distribute; matches any directory)
 Sly1-Release/Worlds/
 Sly1-Release/Cutscenes/
+Worlds/
+Cutscenes/
+*.iso
+build-ci/
+
+# Android local/build files (never commit: keys, SDK paths, downloaded third-party trees, APKs, game data)
+android/local.properties
+android/third_party/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+.cxx/
+*.apk
+*.aab
+*.jks
+*.keystore
+*.idsig
+device-screen.png
+Worlds/
+Cutscenes/
 *.iso

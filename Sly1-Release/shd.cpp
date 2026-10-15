@@ -370,6 +370,91 @@ void SetSaiIframe(SAI* psai, int iframe)
     psai->iframe = iframe;
 }
 
+#ifdef CANE_GLES
+namespace
+{
+    // GLES drivers refuse glGenerateMipmap on compressed formats (the smaller mips stay undefined and show up as noise on
+    // distant surfaces), so a BC1/BC3 texture that asks for runtime mips is decoded to RGBA8 first.
+    void DecodeBcToRgba(const uint8_t* src, uint32_t width, uint32_t height, bool fBc3, std::vector<uint8_t>& out)
+    {
+        out.assign(static_cast<size_t>(width) * height * 4, 255);
+        const uint32_t blocksX = (width + 3) / 4;
+        const uint32_t blocksY = (height + 3) / 4;
+
+        for (uint32_t by = 0; by < blocksY; ++by)
+        {
+            for (uint32_t bx = 0; bx < blocksX; ++bx)
+            {
+                const uint8_t* block = src + (static_cast<size_t>(by) * blocksX + bx) * (fBc3 ? 16 : 8);
+                uint8_t alpha[8] = {};
+                const uint8_t* colorBlock = block;
+                if (fBc3)
+                {
+                    alpha[0] = block[0];
+                    alpha[1] = block[1];
+                    for (int i = 0; i < 6; ++i)
+                        alpha[2 + i] = alpha[0] > alpha[1]
+                            ? static_cast<uint8_t>(((6 - i) * alpha[0] + (1 + i) * alpha[1]) / 7)
+                            : (i < 4 ? static_cast<uint8_t>(((4 - i) * alpha[0] + (1 + i) * alpha[1]) / 5)
+                                     : static_cast<uint8_t>(i == 4 ? 0 : 255));
+                    colorBlock = block + 8;
+                }
+
+                const uint16_t c0 = static_cast<uint16_t>(colorBlock[0] | (colorBlock[1] << 8));
+                const uint16_t c1 = static_cast<uint16_t>(colorBlock[2] | (colorBlock[3] << 8));
+                uint8_t palette[4][3];
+                auto expand = [](uint16_t c, uint8_t* rgb)
+                {
+                    rgb[0] = static_cast<uint8_t>(((c >> 11) & 31) * 255 / 31);
+                    rgb[1] = static_cast<uint8_t>(((c >> 5) & 63) * 255 / 63);
+                    rgb[2] = static_cast<uint8_t>((c & 31) * 255 / 31);
+                };
+                expand(c0, palette[0]);
+                expand(c1, palette[1]);
+                for (int ch = 0; ch < 3; ++ch)
+                {
+                    if (fBc3 || c0 > c1)
+                    {
+                        palette[2][ch] = static_cast<uint8_t>((2 * palette[0][ch] + palette[1][ch]) / 3);
+                        palette[3][ch] = static_cast<uint8_t>((palette[0][ch] + 2 * palette[1][ch]) / 3);
+                    }
+                    else
+                    {
+                        palette[2][ch] = static_cast<uint8_t>((palette[0][ch] + palette[1][ch]) / 2);
+                        palette[3][ch] = 0;
+                    }
+                }
+
+                const uint32_t colorBits = static_cast<uint32_t>(colorBlock[4]) | (static_cast<uint32_t>(colorBlock[5]) << 8) |
+                    (static_cast<uint32_t>(colorBlock[6]) << 16) | (static_cast<uint32_t>(colorBlock[7]) << 24);
+                uint64_t alphaBits = 0;
+                if (fBc3)
+                    for (int i = 0; i < 6; ++i)
+                        alphaBits |= static_cast<uint64_t>(block[2 + i]) << (8 * i);
+
+                for (uint32_t py = 0; py < 4; ++py)
+                {
+                    for (uint32_t px = 0; px < 4; ++px)
+                    {
+                        const uint32_t x = bx * 4 + px;
+                        const uint32_t y = by * 4 + py;
+                        if (x >= width || y >= height)
+                            continue;
+                        const uint32_t texel = py * 4 + px;
+                        uint8_t* dst = out.data() + (static_cast<size_t>(y) * width + x) * 4;
+                        const uint8_t* rgb = palette[(colorBits >> (2 * texel)) & 3];
+                        dst[0] = rgb[0];
+                        dst[1] = rgb[1];
+                        dst[2] = rgb[2];
+                        dst[3] = fBc3 ? alpha[(alphaBits >> (3 * texel)) & 7] : 255;
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 void LoadTexturesFromBrx(CBinaryInputStream* pbis)
 {
     const size_t dataStart = pbis->GetOffset();
@@ -439,15 +524,25 @@ void LoadTexturesFromBrx(CBinaryInputStream* pbis)
         ApplyAnisotropyToBoundTexture();
         constexpr GLenum kGlBc1 = 0x83F0; // GL_COMPRESSED_RGB_S3TC_DXT1_EXT
         constexpr GLenum kGlBc3 = 0x83F3; // GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
-        const GLenum internalFormat = image.textureFormat == kTextureBc1
-            ? kGlBc1 : image.textureFormat == kTextureBc3 ? kGlBc3 : GL_RGBA8;
+        bool uploadAsRgba = false;
+        std::vector<uint8_t> decodedRgba;
+#ifdef CANE_GLES
+        if (generateMipmaps && image.textureFormat != kTextureRgba8 && image.mipCount == 1)
+        {
+            DecodeBcToRgba(image.diffuseTexture.data(), image.bmpWidth, image.bmpHeight,
+                image.textureFormat == kTextureBc3, decodedRgba);
+            uploadAsRgba = true;
+        }
+#endif
+        const GLenum internalFormat = uploadAsRgba ? GL_RGBA8
+            : image.textureFormat == kTextureBc1 ? kGlBc1 : image.textureFormat == kTextureBc3 ? kGlBc3 : GL_RGBA8;
         glTexStorage2D(GL_TEXTURE_2D, storageMipCount, internalFormat,
             image.bmpWidth, image.bmpHeight);
 
         size_t levelOffset = 0;
         uint32_t width = image.bmpWidth;
         uint32_t height = image.bmpHeight;
-        for (uint32_t level = 0; level < image.mipCount; ++level)
+        for (uint32_t level = 0; !uploadAsRgba && level < image.mipCount; ++level)
         {
             const size_t levelBytes = image.textureFormat == kTextureRgba8
                 ? static_cast<size_t>(width) * height * 4
@@ -465,6 +560,13 @@ void LoadTexturesFromBrx(CBinaryInputStream* pbis)
             levelOffset += levelBytes;
             width = std::max(1u, width >> 1);
             height = std::max(1u, height >> 1);
+        }
+
+        if (uploadAsRgba)
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image.bmpWidth, image.bmpHeight,
+                GL_RGBA, GL_UNSIGNED_BYTE, decodedRgba.data());
+            levelOffset = image.diffuseTexture.size();
         }
 
         if (levelOffset != image.diffuseTexture.size())

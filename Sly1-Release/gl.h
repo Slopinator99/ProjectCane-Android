@@ -64,7 +64,13 @@ struct alignas(16) ROGL
 	int32_t   fDynamicLight; // 616 - 619
 	int32_t   trlk;          // 620 - 623
 	glm::vec4 posCenter;     // 624 - 639
+	// Vertex-SSBO fallback only: static lights that can reach this draw (built on the CPU,
+	// superset of the shader's own per-light tests, so the lighting result is unchanged).
+	// relightHdr[0] = number of indices + 1; 0 means "not built, scan the whole table".
+	int32_t   relightHdr[4] = { 0, 0, 0, 0 };   // 640 - 655
+	int32_t   relightIdx[28] = {};              // 656 - 767
 };
+static_assert(sizeof(ROGL) == 768, "ROGL must stay std140-compatible with the RO uniform block");
 
 // Per-group BLIP parameters. One aligned range is streamed for every queued
 // BLIP group, replacing several individual glUniform updates.
@@ -87,6 +93,17 @@ struct STREAM
 	uint8_t* mappedPtr;
 	GLsync* fences; // length = g_frames
 	std::vector<uint8_t> staging;
+	// Records appended mid-frame (AppendStream) live in this small private buffer. Writing them into
+	// bufferObject -- which hundreds of earlier draws of the same frame have already read -- made the
+	// Adreno driver duplicate/stall on the whole ring (~9 ms for a 768-byte write).
+	// One buffer object per frame slot (bufferObject always points at the current slot's buffer). A slot is
+	// only written after its fence says the GPU is done with it, so the driver never sees a write to a
+	// buffer that is still in use -- one shared multi-frame buffer made Adreno copy/stall 5-9 ms per upload.
+	GLuint slotBuffers[8] = {};
+	GLsizeiptr totalSize = 0;
+	GLuint appendBuffer = 0;
+	GLsizeiptr appendCursor = 0;
+	GLsizeiptr appendSize = 0;
 };
 
 struct BLOTLINEVERTEX
@@ -200,6 +217,7 @@ void FrameBufferSizeCallBack(GLFWwindow* window, int width, int height);
 
 extern GL g_gl;
 extern GLuint cmUBO;
+void UpdateCmUbo(const void* data);
 extern STREAM ropStream;
 extern STREAM rcbStream;
 extern STREAM blipStream;
@@ -258,10 +276,13 @@ extern float s_dyDisplayOriginal;
 extern GLuint lineVao;
 extern GLuint lineVbo;
 extern GLuint glslfSkin;
+extern GLuint glslCaneBake;
 extern GLint  glslCelSkin;
 extern GLuint glslfPose;
 extern GLuint glslPoseCount;
+extern GLuint glslPoseWeights;
 extern GLuint glslCelPose;
 extern GLuint glslCelPoseCount;
+extern GLuint glslCelPoseWeights;
 
 #endif

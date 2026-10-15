@@ -1447,9 +1447,18 @@ void UpdateAloInfluences(ALO* palo, RO* pro)
 
 	if (globset.boneMatrixSSBO != 0 && !globset.boneMatrices.empty())
 	{
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, globset.boneMatrixSSBO);
-		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(globset.boneMatrices.size() * sizeof(glm::mat4)), globset.boneMatrices.data());
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		// §8.1 fallback: bone matrices are a data texture (buffer 9 -> unit 5).
+		if (g_fVertexUboFallback)
+		{
+			UpdateFallbackTex(globset.boneMatrixSSBO, FALLBACKTEX_MAT4,
+				globset.boneMatrices.size(), globset.boneMatrices.data());
+		}
+		else
+		{
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, globset.boneMatrixSSBO);
+			glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(globset.boneMatrices.size() * sizeof(glm::mat4)), globset.boneMatrices.data());
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		}
 	}
 }
 
@@ -4533,6 +4542,7 @@ void RenderAloLine(ALO* palo, CM* pcm, glm::vec3* ppos0, glm::vec3* ppos1, float
 void DeleteModel(ALO* palo)
 {
 	std::unordered_set<GLuint> deletedBuffers;
+	std::unordered_set<GLuint> deletedTextures;
 	std::unordered_set<GLuint> deletedVertexArrays;
 
 	auto DeleteBuffer = [&](GLuint& buffer)
@@ -4543,6 +4553,25 @@ void DeleteModel(ALO* palo)
 		buffer = 0;
 	};
 
+	auto DeleteTexture = [&](GLuint& texture)
+	{
+		if (texture != 0 && deletedTextures.insert(texture).second)
+			glDeleteTextures(1, &texture);
+
+		texture = 0;
+	};
+
+	// §8.1: pose/edge/bone/warp names are textures under the vertex-SSBO
+	// fallback and buffers otherwise. VBO/EBO and the cached-material buffer
+	// are never routed, so they keep DeleteBuffer.
+	auto DeleteGpuResource = [&](GLuint& resource)
+	{
+		if (g_fVertexUboFallback)
+			DeleteTexture(resource);
+		else
+			DeleteBuffer(resource);
+	};
+
 	auto DeleteVertexArray = [&](GLuint& vertexArray)
 	{
 		if (vertexArray != 0 && deletedVertexArrays.insert(vertexArray).second)
@@ -4551,7 +4580,7 @@ void DeleteModel(ALO* palo)
 		vertexArray = 0;
 	};
 
-	DeleteBuffer(palo->globset.boneMatrixSSBO);
+	DeleteGpuResource(palo->globset.boneMatrixSSBO);
 	DeleteGlobsetPoseWeightBuffer(&palo->globset);
 
 	for (GLOB& glob : palo->globset.aglob)
@@ -4560,13 +4589,15 @@ void DeleteModel(ALO* palo)
 		DeleteBuffer(glob.VBO);
 		DeleteBuffer(glob.EBO);
 		DeleteBuffer(glob.ssboCachedMaterial);
-		DeleteBuffer(glob.poseDposSSBO);
-		DeleteBuffer(glob.poseDnormalSSBO);
-		DeleteBuffer(glob.edgeSSBO);
-		DeleteBuffer(glob.edgePoseDposSSBO);
+		DeleteGpuResource(glob.poseDposSSBO);
+		DeleteGpuResource(glob.poseDnormalSSBO);
+		DeleteGpuResource(glob.edgeSSBO);
+		DeleteGpuResource(glob.edgeBoneIndicesSSBO);
+		DeleteGpuResource(glob.edgeBoneWeightsSSBO);
+		DeleteGpuResource(glob.edgePoseDposSSBO);
 
 		if (glob.pwarpGlob != nullptr)
-			DeleteBuffer(glob.pwarpGlob->ssboState);
+			DeleteGpuResource(glob.pwarpGlob->ssboState);
 
 		glob.poseDpos.clear();
 		glob.poseDnormal.clear();

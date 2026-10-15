@@ -27,12 +27,32 @@
 #define FOG_PS3  2
 
 
+#ifdef CANE_DIAG_SHADER
+uniform int caneVert;   // debug: 1 = no vertex shadow loop, 2 = no lighting, 4 = no skinning, 8 = no static relight, 16 = no dynamic lights
+#define CANE_VERT_OFF(bit) ((caneVert & (bit)) != 0)
+bool caneRelightMismatch = false;
+bool caneBakeWasZero = false;
+#else
+#define CANE_VERT_OFF(bit) false
+#endif
+
 layout (location = 0) in vec3  vertex;
 layout (location = 1) in vec3  normal;
 layout (location = 2) in vec4  color;
 layout (location = 3) in vec2  uv;
 layout (location = 4) in uvec4 boneIndices;
 layout (location = 5) in vec4  boneWeights;
+#ifdef CANE_VERTEX_UBO_FALLBACK
+// Static lighting baked once per relight by a transform-feedback pass (see DrawGlob); read back here
+// instead of recomputing the light loops for every vertex of every draw. 36 bytes per vertex.
+layout (location = 6) in float bakeAmbient;
+layout (location = 7) in vec4  bakeMidtone;
+layout (location = 8) in vec4  bakeLight;
+uniform int caneBake;   // 1 while the bake pass is running: static lighting only, no dynamic lights
+#define CANE_BAKING (caneBake != 0)
+#else
+#define CANE_BAKING false
+#endif
 
 struct SWP // Scene world properties
 {
@@ -93,11 +113,25 @@ struct MATERIAL
     vec4  light;
 };
 
+#ifdef CANE_VERTEX_UBO_FALLBACK
+// Fallback: the camera travels as plain uniforms. Their values are captured with each draw, so rewriting
+// them for the next pass can never change a draw that is already queued (Adreno showed one-frame
+// glitches with the shared camera uniform block).
+uniform mat4 caneCmWorldToClip;
+uniform vec4 caneCmCameraPos;
+struct CMGL_T
+{
+    mat4 matWorldToClip;
+    vec4 cameraPos;
+};
+#define cm CMGL_T(caneCmWorldToClip, caneCmCameraPos)
+#else
 layout(std140, binding = 0) uniform CMGL
 {
     mat4 matWorldToClip;
     vec4 cameraPos;
 } cm;
+#endif
 
 layout(std140, binding = 1) uniform RO
 {
@@ -117,7 +151,106 @@ layout(std140, binding = 1) uniform RO
     int   fDynamicLight;
     int   trlk;
     vec4  posCenter;
+    // Fallback per-draw light lists built on the CPU (all zero = not built, scan everything):
+    //   x = static list length + 1, y = dynamic list length + 1, z = static list kind
+    //   (0 = relight list over the whole level table, 1 = camera-zone active static lights).
+    ivec4 relightHdr;
+    ivec4 relightIdx[7];  // [0..15] static list, [16..27] dynamic list
 } op;
+
+#ifdef CANE_VERTEX_UBO_FALLBACK
+// §8.1 vertex-SSBO fallback: the light/shadow tables become std140 uniform
+// blocks (the CPU layouts are already std140-compatible; sized arrays keep
+// .length() working) and the per-mesh arrays become data textures sampled
+// with texelFetch (sampler units fixed in gl.cpp). Index-list access goes
+// through the macros below, which collapse to the original expressions on
+// the desktop path.
+// The light table is a data texture here, not a uniform block: with a 256-entry LIGHT array in a
+// std140 block the Adreno driver copies the whole block (~50 KB) on every draw (it was >50% of the
+// game thread's CPU time). Each light is 13 RGBA32I texels (raw LIGHTBLK bits), one light per row.
+layout(std140, binding = 2) uniform LIGHTBLK
+{
+    int numLights;
+};
+uniform isampler2D lightTex;   // unit 10
+
+LIGHT FetchLight(int i)
+{
+    LIGHT L;
+    ivec4 t0 = texelFetch(lightTex, ivec2(0, i), 0);
+    L.lightk = t0.x;
+    L.fExcludeDynamicObjects = t0.y;
+    L.fActive = t0.z;
+    L.fDynamic = t0.w;
+    L.pos = intBitsToFloat(texelFetch(lightTex, ivec2(1, i), 0));
+    L.dir = intBitsToFloat(texelFetch(lightTex, ivec2(2, i), 0));
+    L.color = intBitsToFloat(texelFetch(lightTex, ivec2(3, i), 0));
+    vec4 t4 = intBitsToFloat(texelFetch(lightTex, ivec2(4, i), 0));
+    L.constant = t4.x;
+    L.invDst = t4.y;
+    L.pad4 = t4.z;
+    L.dst = t4.w;
+    L.ru = intBitsToFloat(texelFetch(lightTex, ivec2(5, i), 0));
+    L.du = intBitsToFloat(texelFetch(lightTex, ivec2(6, i), 0));
+    L.matFrustrum = mat4(
+        intBitsToFloat(texelFetch(lightTex, ivec2(7, i), 0)),
+        intBitsToFloat(texelFetch(lightTex, ivec2(8, i), 0)),
+        intBitsToFloat(texelFetch(lightTex, ivec2(9, i), 0)),
+        intBitsToFloat(texelFetch(lightTex, ivec2(10, i), 0)));
+    L.falloffScale = intBitsToFloat(texelFetch(lightTex, ivec2(11, i), 0));
+    L.falloffBias = intBitsToFloat(texelFetch(lightTex, ivec2(12, i), 0));
+    return L;
+}
+#define LIGHTAT(i) FetchLight(i)
+
+layout(std140, binding = 3) uniform ACTIVELIGHTS
+{
+    int numStaticLights;
+    ivec4 staticLightIdx4[MAX_LIGHTS / 4];
+    int numDynamicLights;
+    ivec4 dynamicLightIdx4[MAX_LIGHTS / 4];
+};
+
+layout(std140, binding = 4) uniform SHADOWBLK
+{
+    int numLevelShadows;
+    SHADOW shadows[MAX_SHADOWS];
+};
+
+layout(std140, binding = 5) uniform ACTIVESHADOWS
+{
+    int numActiveShadows;
+    ivec4 shadowIdx4[(MAX_SHADOWS + 3) / 4];
+};
+
+layout(std140, binding = 13) uniform TVLIGHTBLK
+{
+    LIGHT tvLights[2];
+};
+
+uniform sampler2D warpStateTex;
+uniform sampler2D bonesTex;
+uniform sampler2D poseDposTex;
+uniform sampler2D poseDnormalTex;
+
+#define STATIC_LIGHT_IDX(i) (staticLightIdx4[(i) >> 2][(i) & 3])
+#define DYN_LIGHT_IDX(i)    (dynamicLightIdx4[(i) >> 2][(i) & 3])
+#define SHADOW_IDX(i)       (shadowIdx4[(i) >> 2][(i) & 3])
+#define WARPSTATE_AT(i)     texelFetch(warpStateTex, ivec2((i) & 1023, ((i) >> 10)), 0)
+#define POSEPOS_AT(i)       texelFetch(poseDposTex, ivec2((i) & 1023, ((i) >> 10)), 0)
+#define POSENORMAL_AT(i)    texelFetch(poseDnormalTex, ivec2((i) & 1023, ((i) >> 10)), 0)
+#define BONE_AT(i)          mat4(texelFetch(bonesTex, ivec2(0, int(i)), 0), \
+                                 texelFetch(bonesTex, ivec2(1, int(i)), 0), \
+                                 texelFetch(bonesTex, ivec2(2, int(i)), 0), \
+                                 texelFetch(bonesTex, ivec2(3, int(i)), 0))
+#define WARPSTATE_LEN       (textureSize(warpStateTex, 0).x * textureSize(warpStateTex, 0).y)
+#define POSEPOS_LEN         (textureSize(poseDposTex, 0).x * textureSize(poseDposTex, 0).y)
+#define MAX_POSES           64
+uniform float poseWeights[MAX_POSES];
+#define POSEWEIGHTS_LEN     MAX_POSES
+#define POSENORMAL_LEN      (textureSize(poseDnormalTex, 0).x * textureSize(poseDnormalTex, 0).y)
+#define BONE_LEN            (textureSize(bonesTex, 0).y)
+#else
 
 layout(std430, binding = 2) readonly buffer LIGHTBLK
 {   
@@ -125,6 +258,7 @@ layout(std430, binding = 2) readonly buffer LIGHTBLK
     int pad[3];
     LIGHT lights[];
 };
+#define LIGHTAT(i) lights[i]
 
 layout(std430, binding = 3) readonly buffer ACTIVELIGHTS
 {
@@ -152,11 +286,6 @@ layout(std430, binding = 6) readonly buffer WARPSTATE
     vec4 warpState[];
 };
 
-layout(std430, binding = 7) buffer CACHEDLIGHTING
-{
-    MATERIAL cachedMaterial[];
-};
-
 layout(std430, binding = 9) readonly buffer BONEBLK
 {
     mat4 boneMatrices[];
@@ -182,6 +311,29 @@ layout(std430, binding = 13) readonly buffer TVLIGHTBLK
     LIGHT tvLights[];
 };
 
+#define STATIC_LIGHT_IDX(i) (staticLightIndices[i])
+#define DYN_LIGHT_IDX(i)    (dynamicLightIndices[i])
+#define SHADOW_IDX(i)       (shadowIndices[i])
+#define WARPSTATE_AT(i)     (warpState[(i)])
+#define POSEPOS_AT(i)       (poseDpos[(i)])
+#define POSENORMAL_AT(i)    (poseDnormal[(i)])
+#define BONE_AT(i)          (boneMatrices[(i)])
+#define WARPSTATE_LEN       (warpState.length())
+#define POSEPOS_LEN         (poseDpos.length())
+#define POSEWEIGHTS_LEN     (poseWeights.length())
+#define POSENORMAL_LEN      (poseDnormal.length())
+#define BONE_LEN            (boneMatrices.length())
+#endif
+
+#ifndef CANE_VERTEX_UBO_FALLBACK
+// The writable per-vertex lighting cache has no fallback: under §8.1 the
+// TRLK_Baked path recomputes the bake every draw instead (see StartThreeWay).
+layout(std430, binding = 7) buffer CACHEDLIGHTING
+{
+    MATERIAL cachedMaterial[];
+};
+#endif
+
 uniform int fPose;
 uniform int poseCount;
 
@@ -204,15 +356,32 @@ vec3  light;
 
 MATERIAL baseMaterial;
 
-layout(location = 0) out vec4 worldPos;
-layout(location = 1) out vec3 worldNormal;
-layout(location = 2) out vec4 vertexColor;
-layout(location = 3) out vec2 texcoord;
+// ES path: Adreno's compiler rejects this interface with explicit locations
+// ("output vShadowIndices location or component conflict"), so on GL_ES the
+// varyings link by name and the MATERIAL struct travels as three plain outputs
+// (copied from the working global at the end of main). Desktop is unchanged.
+#ifdef GL_ES
+#define V_LOC(n)
+#else
+#define V_LOC(n) layout(location = n)
+#endif
 
+V_LOC(0) out vec4 worldPos;
+V_LOC(1) out vec3 worldNormal;
+V_LOC(2) out vec4 vertexColor;
+V_LOC(3) out vec2 texcoord;
+
+#ifdef GL_ES
+MATERIAL material;
+out float vMatAmbient;
+out vec4  vMatMidtone;
+out vec4  vMatLight;
+#else
 layout(location = 4) out MATERIAL material;
-layout(location = 7) flat out int vShadowCount;
-layout(location = 8) flat out ivec4 vShadowIndices[3];
-layout(location = 11) out float fogIntensity;
+#endif
+V_LOC(7) flat out int vShadowCount;
+V_LOC(8) flat out ivec4 vShadowIndices[3];
+V_LOC(11) out float fogIntensity;
 
 void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal);
 void ApplyPoses(inout vec4 positionLocal, inout vec3 normalLocal);
@@ -220,6 +389,8 @@ void StartThreeWay();
 void InitGlobLighting();
 void ApplyStaticLightsRelight();
 void ApplyStaticLights();
+void ApplyStaticLightsPass(bool useList);
+void ApplyDynamicLightsPass(bool useList);
 void ApplyQuickLights();
 void ApplyDynamicLights();
 void AddDynamicMaterial();
@@ -253,8 +424,13 @@ vec3 SafeNormalize(vec3 value)
 
 int AvailableLightCount()
 {
+#ifdef CANE_VERTEX_UBO_FALLBACK
+    return clamp(numLights, 0, MAX_LIGHTS);
+#else
     return min(clamp(numLights, 0, MAX_LIGHTS), lights.length());
+#endif
 }
+
 
 void main()
 {
@@ -277,34 +453,34 @@ void main()
     if (fPose != 0)
         ApplyPoses(positionLocal, normalLocal);
 
-    if (fSkin != 0)
+    if (fSkin != 0 && !CANE_VERT_OFF(4))
     {
         mat4 matSkin = mat4(0.0);
         float totalWeight = 0.0;
 
-        int boneCount = boneMatrices.length();
+        int boneCount = BONE_LEN;
 
         if (boneWeights.x != 0.0 && boneIndices.x < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.x] * boneWeights.x;
+            matSkin += BONE_AT(boneIndices.x) * boneWeights.x;
             totalWeight += boneWeights.x;
         }
 
         if (boneWeights.y != 0.0 && boneIndices.y < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.y] * boneWeights.y;
+            matSkin += BONE_AT(boneIndices.y) * boneWeights.y;
             totalWeight += boneWeights.y;
         }
 
         if (boneWeights.z != 0.0 && boneIndices.z < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.z] * boneWeights.z;
+            matSkin += BONE_AT(boneIndices.z) * boneWeights.z;
             totalWeight += boneWeights.z;
         }
 
         if (boneWeights.w != 0.0 && boneIndices.w < uint(boneCount))
         {
-            matSkin += boneMatrices[boneIndices.w] * boneWeights.w;
+            matSkin += BONE_AT(boneIndices.w) * boneWeights.w;
             totalWeight += boneWeights.w;
         }
 
@@ -332,17 +508,25 @@ void main()
     vertexColor = color;
     texcoord = uvLocal;
 
-    if (rko == RKO_ThreeWay)
+    if (rko == RKO_ThreeWay && !CANE_VERT_OFF(2))
         StartThreeWay();
+#ifdef CANE_DIAG_SHADER
+    if (caneRelightMismatch)
+    {
+        material.ambient = 0.0;
+        material.midtone = caneBakeWasZero ? vec4(0.0, 1.0, 1.0, 0.0) : vec4(1.0, 0.0, 1.0, 0.0);
+        material.light = vec4(0.0);
+    }
+#endif
 
-    if (numActiveShadows > 0)
+    if (numActiveShadows > 0 && !CANE_VERT_OFF(1))
     {
         int shadowCount = clamp(numActiveShadows, 0, MAX_SHADOWS);
         int levelShadowCount = min(max(numLevelShadows, 0), shadows.length());
 
         for (int i = 0; i < shadowCount; ++i)
         {
-            int shIdx = shadowIndices[i];
+            int shIdx = SHADOW_IDX(i);
             if (shIdx < 0 || shIdx >= levelShadowCount)
                 continue;
             SHADOW shadow = shadows[shIdx];
@@ -364,6 +548,12 @@ void main()
     if (swp.fogType != FOG_NONE)
         CalculateFog();
 
+#ifdef GL_ES
+    vMatAmbient = material.ambient;
+    vMatMidtone = material.midtone;
+    vMatLight   = material.light;
+#endif
+
     gl_Position = cm.matWorldToClip * worldPos;
 }
 
@@ -381,9 +571,9 @@ void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal)
         for (int imat = 0; imat < matrixCount; ++imat)
         {
             int stateIndex = imat * op.warpCvtx + gl_VertexID;
-            if (stateIndex < 0 || stateIndex >= warpState.length())
+            if (stateIndex < 0 || stateIndex >= WARPSTATE_LEN)
                 continue;
-            vec4 st  = warpState[stateIndex];
+            vec4 st  = WARPSTATE_AT(stateIndex);
             sumPos0 += op.amatDpos[imat] * st;
         }
 
@@ -396,9 +586,9 @@ void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal)
         for (int imat = 0; imat < matrixCount; ++imat)
         {
              int stateIndex = imat * op.warpCvtx + gl_VertexID;
-             if (stateIndex < 0 || stateIndex >= warpState.length())
+             if (stateIndex < 0 || stateIndex >= WARPSTATE_LEN)
                  continue;
-             vec4 st = warpState[stateIndex];
+             vec4 st = WARPSTATE_AT(stateIndex);
              sumUv0 += (op.amatDuv[imat] * st).xy;
         }
 
@@ -412,9 +602,9 @@ void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal)
         for (int imat = 0; imat < matrixCount; ++imat)
         {
              int stateIndex = imat * op.warpCvtx + gl_VertexID;
-             if (stateIndex < 0 || stateIndex >= warpState.length())
+             if (stateIndex < 0 || stateIndex >= WARPSTATE_LEN)
                  continue;
-             vec4 st  = warpState[stateIndex];
+             vec4 st  = WARPSTATE_AT(stateIndex);
              sumPos1 += op.amatDpos[imat] * st;
              sumUv1  += (op.amatDuv[imat] * st).xy;
         }
@@ -429,7 +619,7 @@ void ApplyPoses(inout vec4 positionLocal, inout vec3 normalLocal)
 {
     vec3 dpos = vec3(0.0);
     vec3 dnormal = vec3(0.0);
-    int count = min(max(poseCount, 0), poseWeights.length());
+    int count = min(max(poseCount, 0), POSEWEIGHTS_LEN);
     int poseBase = gl_VertexID * poseCount;
 
     for (int ipose = 0; ipose < count; ++ipose)
@@ -440,12 +630,12 @@ void ApplyPoses(inout vec4 positionLocal, inout vec3 normalLocal)
             continue;
 
         int poseIndex = poseBase + ipose;
-        if (poseIndex < 0 || poseIndex >= poseDpos.length() ||
-            poseIndex >= poseDnormal.length())
+        if (poseIndex < 0 || poseIndex >= POSEPOS_LEN ||
+            poseIndex >= POSENORMAL_LEN)
             continue;
 
-        dpos += poseDpos[poseIndex].xyz * weight;
-        dnormal += poseDnormal[poseIndex].xyz * weight;
+        dpos += POSEPOS_AT(poseIndex).xyz * weight;
+        dnormal += POSENORMAL_AT(poseIndex).xyz * weight;
     }
 
     positionLocal.xyz += dpos;
@@ -459,7 +649,12 @@ void ApplyPoses(inout vec4 positionLocal, inout vec3 normalLocal)
 
 void StartThreeWay()
 {
-    switch(op.trlk)
+    // A transform-feedback bake always runs the relight path, whatever the draw record says.
+    int trlkEff = op.trlk;
+#ifdef CANE_VERTEX_UBO_FALLBACK
+    if (CANE_BAKING) trlkEff = TRLK_Relight;
+#endif
+    switch(trlkEff)
     {
         // TV portraits use the retail pglob->pblot Quick-light path.  The
         // sole detached TV light is evaluated after pose/skin transforms and
@@ -477,16 +672,57 @@ void StartThreeWay()
         ProcessGlobLighting();
         // Bake static lights
         CacheWriteMaterial();
-        // Show dynamic this frame
-        if (op.fDynamicLight == 1)
+        // Show dynamic this frame (not while baking: the cache holds the static part only)
+        if (op.fDynamicLight == 1 && !CANE_BAKING)
             AddDynamicMaterial();
         break;
 
         case TRLK_Baked:
+#ifdef CANE_VERTEX_UBO_FALLBACK
+        // §8.1: there is no vertex-stage-writable cache in the fallback, so the static bake is captured
+        // by a transform-feedback pass when the glob is relit (DrawGlob) and read back here as
+        // attributes; dynamic lights are added on top as before.
+        {
+            MATERIAL bakedMaterial;
+            bakedMaterial.ambient = bakeAmbient;
+            bakedMaterial.midtone = bakeMidtone;
+            bakedMaterial.light = bakeLight;
+#ifdef CANE_DIAG_SHADER
+            if (CANE_VERT_OFF(32))
+            {
+                // Debug self-check: recompute the static bake here and compare it with the cached one.
+                InitGlobLighting();
+                ApplyStaticLightsRelight();
+                ProcessGlobLighting();
+                if (abs(material.ambient - bakedMaterial.ambient) > 2e-3 ||
+                    any(greaterThan(abs(material.midtone - bakedMaterial.midtone), vec4(2e-3))) ||
+                    any(greaterThan(abs(material.light - bakedMaterial.light), vec4(2e-3))))
+                {
+                    caneRelightMismatch = true;
+                    // cyan instead of magenta: the cache holds nothing at all (never baked)
+                    if (bakedMaterial.ambient == 0.0 && all(equal(bakedMaterial.midtone, vec4(0.0))) && all(equal(bakedMaterial.light, vec4(0.0))))
+                        caneBakeWasZero = true;
+                }
+            }
+#endif
+#ifdef CANE_DIAG_SHADER
+            if (CANE_VERT_OFF(64))
+            {
+                // Experiment: ignore the cached attributes and light fresh, like a relight draw.
+                InitGlobLighting();
+                ApplyStaticLightsRelight();
+                ProcessGlobLighting();
+            }
+            else
+#endif
+            material = bakedMaterial;
+        }
+#else
         // Read cached static
         CacheReadMaterial();
+#endif
         // Dynamic on top (PS2 DownloadRelight idea)
-        if (op.fDynamicLight == 1)
+        if (op.fDynamicLight == 1 && !CANE_VERT_OFF(16))
             AddDynamicMaterial();
         break;
 
@@ -535,187 +771,278 @@ void InitGlobLighting()
     normalWorld = worldNormal;
 }
 
+void RelightAddOne(int i)
+{
+    LIGHT L = LIGHTAT(i);
+    if (L.fActive == 0 || L.fDynamic != 0)
+        return;
+
+    switch (L.lightk)
+    {
+        case LIGHTK_Direction:
+        light.rgb += AddDirectionLight(L).rgb;
+        break;
+
+        case LIGHTK_Position:
+        if (!SphereIntersectsPositionLight(L, op.posCenter.xyz, op.sRadius))
+            return;
+
+        light.rgb += AddPositionLight(L).rgb;
+        break;
+
+        case LIGHTK_Frustrum:
+        case LIGHTK_Spot:
+        if (!SphereIntersectsFrustum(L, op.posCenter.xyz, op.sRadius))
+            return;
+
+        light.rgb += AddFrustrumLight(L).rgb;
+        break;
+    }
+}
+
 void ApplyStaticLightsRelight()
 {
     // A relight result is cached on the glob and can outlive the camera's
     // current BSP zone.  Build that persistent cache from the complete GPU
     // light table instead of the camera-zone-filtered active-light list.
     int lightCount = AvailableLightCount();
-    for (int i = 0; i < lightCount; ++i)
+
+#ifdef CANE_VERTEX_UBO_FALLBACK
+#ifdef CANE_DIAG_SHADER
+    // Debug self-check (debug.cane.vert bit 32): compute both ways and flag any difference.
+    if (CANE_VERT_OFF(32) && op.relightHdr.x > 0 && op.relightHdr.z == 0)
     {
-        if (lights[i].fActive == 0 || lights[i].fDynamic != 0)
-            continue;
-
-        switch (lights[i].lightk)
+        vec3 saved = light;
+        int listCount0 = min(op.relightHdr.x - 1, 16);
+        for (int k = 0; k < listCount0; ++k)
         {
-            case LIGHTK_Direction:
-            light.rgb += AddDirectionLight(lights[i]).rgb;
-            break;
-
-            case LIGHTK_Position:
-            if (!SphereIntersectsPositionLight(lights[i], op.posCenter.xyz, op.sRadius))
-                continue;
-
-            light.rgb += AddPositionLight(lights[i]).rgb;
-            break;
-
-            case LIGHTK_Frustrum:
-            case LIGHTK_Spot:
-            if (!SphereIntersectsFrustum(lights[i], op.posCenter.xyz, op.sRadius))
-                continue;
-
-            light.rgb += AddFrustrumLight(lights[i]).rgb;
-            break;
+            int i = op.relightIdx[k >> 2][k & 3];
+            if (i >= 0 && i < lightCount)
+                RelightAddOne(i);
         }
+        vec3 viaList = light;
+        light = saved;
+        for (int i = 0; i < lightCount; ++i)
+            RelightAddOne(i);
+        vec3 viaTable = light;
+        if (any(greaterThan(abs(viaList - viaTable), vec3(1e-4))))
+            caneRelightMismatch = true;
+        return;
     }
+#endif
+    // Fallback: the CPU supplies the (few) lights that can reach this draw; the exact
+    // per-light tests below still run on each one, so the result is identical.
+    if (op.relightHdr.x > 0 && op.relightHdr.z == 0)
+    {
+        int listCount = min(op.relightHdr.x - 1, 16);
+        for (int k = 0; k < listCount; ++k)
+        {
+            int i = op.relightIdx[k >> 2][k & 3];
+            if (i >= 0 && i < lightCount)
+                RelightAddOne(i);
+        }
+        return;
+    }
+#endif
+
+    for (int i = 0; i < lightCount; ++i)
+        RelightAddOne(i);
 }
 
-void ApplyStaticLights()
+void ApplyStaticLightsPass(bool useList)
 {
     if (numStaticLights == 0)
         return;
 
     if (op.fDynamic != 1)
     {
-        int count = clamp(numStaticLights, 0, MAX_LIGHTS);
+        int count = useList ? min(op.relightHdr.x - 1, 16) : clamp(numStaticLights, 0, MAX_LIGHTS);
         for (int i = 0; i < count; ++i)
         {
-            int idx = staticLightIndices[i];
+            int idx = useList ? op.relightIdx[i >> 2][i & 3] : STATIC_LIGHT_IDX(i);
             if (idx < 0 || idx >= AvailableLightCount())
                 continue;
 
-            switch (lights[idx].lightk)
+            LIGHT Lc = LIGHTAT(idx);
+
+            switch (Lc.lightk)
             {
                 case LIGHTK_Direction:
-                light.rgb += AddDirectionLight(lights[idx]).rgb;
+                light.rgb += AddDirectionLight(Lc).rgb;
                 break;
 
                 case LIGHTK_Position:
-                if (!SphereIntersectsPositionLight(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsPositionLight(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddPositionLight(lights[idx]).rgb;
+                light.rgb += AddPositionLight(Lc).rgb;
                 break;
 
                 case LIGHTK_Frustrum:
                 case LIGHTK_Spot:
-                if (!SphereIntersectsFrustum(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsFrustum(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddFrustrumLight(lights[idx]).rgb;
+                light.rgb += AddFrustrumLight(Lc).rgb;
                 break;
             }
         }
     }
     else
     {
-        int count = clamp(numStaticLights, 0, MAX_LIGHTS);
+        int count = useList ? min(op.relightHdr.x - 1, 16) : clamp(numStaticLights, 0, MAX_LIGHTS);
         for (int i = 0; i < count; ++i)
         {
-            int idx = staticLightIndices[i];
+            int idx = useList ? op.relightIdx[i >> 2][i & 3] : STATIC_LIGHT_IDX(i);
             if (idx < 0 || idx >= AvailableLightCount())
                 continue;
 
-            if (lights[idx].fExcludeDynamicObjects != 0)
+            LIGHT Lc = LIGHTAT(idx);
+
+            if (Lc.fExcludeDynamicObjects != 0)
                 continue;
 
-            switch (lights[idx].lightk)
+            switch (Lc.lightk)
             {
                 case LIGHTK_Direction:
-                light.rgb += AddDynamicLight(lights[idx].dir, lights[idx].color, lights[idx].ru, lights[idx].du).rgb;
+                light.rgb += AddDynamicLight(Lc.dir, Lc.color, Lc.ru, Lc.du).rgb;
                 break;
 
                 case LIGHTK_Position:
-                if (!SphereIntersectsPositionLight(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsPositionLight(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddPositionLightDynamic(lights[idx]).rgb;
+                light.rgb += AddPositionLightDynamic(Lc).rgb;
                 break;
 
                 case LIGHTK_Frustrum:
                 case LIGHTK_Spot:
-                if (!SphereIntersectsFrustum(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsFrustum(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddFrustrumLightDynamic(lights[idx]).rgb;
+                light.rgb += AddFrustrumLightDynamic(Lc).rgb;
                 break;
             }
         }
     }
 }
 
-void ApplyDynamicLights()
+void ApplyDynamicLightsPass(bool useList)
 {
     if (numDynamicLights == 0)
         return;
 
     if (op.fDynamic != 1)
     {
-        int count = clamp(numDynamicLights, 0, MAX_LIGHTS);
+        int count = useList ? min(op.relightHdr.y - 1, 12) : clamp(numDynamicLights, 0, MAX_LIGHTS);
         for (int i = 0; i < count; ++i)
         {
-            int idx = dynamicLightIndices[i];
+            int idx = useList ? op.relightIdx[4 + (i >> 2)][i & 3] : DYN_LIGHT_IDX(i);
             if (idx < 0 || idx >= AvailableLightCount())
                 continue;
 
-            switch (lights[idx].lightk)
+            LIGHT Lc = LIGHTAT(idx);
+
+            switch (Lc.lightk)
             {
                 case LIGHTK_Direction:
-                light.rgb += AddDirectionLight(lights[idx]).rgb;
+                light.rgb += AddDirectionLight(Lc).rgb;
                 break;
 
                 case LIGHTK_Position:
-                if (!SphereIntersectsPositionLight(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsPositionLight(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddPositionLight(lights[idx]).rgb;
+                light.rgb += AddPositionLight(Lc).rgb;
                 break;
 
                 case LIGHTK_Frustrum:
                 case LIGHTK_Spot:
-                if (!SphereIntersectsFrustum(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsFrustum(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddFrustrumLight(lights[idx]).rgb;
+                light.rgb += AddFrustrumLight(Lc).rgb;
                 break;
             }
         }
     }
     else
     {
-        int count = clamp(numDynamicLights, 0, MAX_LIGHTS);
+        int count = useList ? min(op.relightHdr.y - 1, 12) : clamp(numDynamicLights, 0, MAX_LIGHTS);
         for (int i = 0; i < count; ++i)
         {
-            int idx = dynamicLightIndices[i];
+            int idx = useList ? op.relightIdx[4 + (i >> 2)][i & 3] : DYN_LIGHT_IDX(i);
             if (idx < 0 || idx >= AvailableLightCount())
                 continue;
 
-            if (lights[idx].fExcludeDynamicObjects != 0)
+            LIGHT Lc = LIGHTAT(idx);
+
+            if (Lc.fExcludeDynamicObjects != 0)
                 continue;
 
-            switch (lights[idx].lightk)
+            switch (Lc.lightk)
             {
                 case LIGHTK_Direction:
-                light.rgb += AddDynamicLight(lights[idx].dir, lights[idx].color, lights[idx].ru, lights[idx].du).rgb;
+                light.rgb += AddDynamicLight(Lc.dir, Lc.color, Lc.ru, Lc.du).rgb;
                 break;
 
                 case LIGHTK_Position:
-                if (!SphereIntersectsPositionLight(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsPositionLight(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddPositionLightDynamic(lights[idx]).rgb;
+                light.rgb += AddPositionLightDynamic(Lc).rgb;
                 break;
 
                 case LIGHTK_Frustrum:
                 case LIGHTK_Spot:
-                if (!SphereIntersectsFrustum(lights[idx], op.posCenter.xyz, op.sRadius))
+                if (!SphereIntersectsFrustum(Lc, op.posCenter.xyz, op.sRadius))
                     continue;
 
-                light.rgb += AddFrustrumLightDynamic(lights[idx]).rgb;
+                light.rgb += AddFrustrumLightDynamic(Lc).rgb;
                 break;
             }
         }
     }
+}
+
+void ApplyStaticLights()
+{
+    bool useList = op.relightHdr.x > 0 && op.relightHdr.z == 1;
+#ifdef CANE_DIAG_SHADER
+    if (CANE_VERT_OFF(32) && useList)
+    {
+        float s0 = objectShadow, m0 = objectMidtone; vec3 l0 = light;
+        ApplyStaticLightsPass(true);
+        vec3 a = vec3(objectShadow, objectMidtone, 0.0) + light;
+        objectShadow = s0; objectMidtone = m0; light = l0;
+        ApplyStaticLightsPass(false);
+        vec3 b = vec3(objectShadow, objectMidtone, 0.0) + light;
+        if (any(greaterThan(abs(a - b), vec3(1e-4))))
+            caneRelightMismatch = true;
+        return;
+    }
+#endif
+    ApplyStaticLightsPass(useList);
+}
+
+void ApplyDynamicLights()
+{
+    bool useList = op.relightHdr.y > 0;
+#ifdef CANE_DIAG_SHADER
+    if (CANE_VERT_OFF(32) && useList)
+    {
+        float s0 = objectShadow, m0 = objectMidtone; vec3 l0 = light;
+        ApplyDynamicLightsPass(true);
+        vec3 a = vec3(objectShadow, objectMidtone, 0.0) + light;
+        objectShadow = s0; objectMidtone = m0; light = l0;
+        ApplyDynamicLightsPass(false);
+        vec3 b = vec3(objectShadow, objectMidtone, 0.0) + light;
+        if (any(greaterThan(abs(a - b), vec3(1e-4))))
+            caneRelightMismatch = true;
+        return;
+    }
+#endif
+    ApplyDynamicLightsPass(useList);
 }
 
 void AddDynamicMaterial()
@@ -966,16 +1293,19 @@ bool ShadowIntersectsSphere(SHADOW shadow, vec3 objectCenter, float objectRadius
 
 void CacheWriteMaterial()
 {
+#ifndef CANE_VERTEX_UBO_FALLBACK
     if (gl_VertexID < 0 || gl_VertexID >= cachedMaterial.length())
         return;
 
     cachedMaterial[gl_VertexID].ambient = material.ambient;
     cachedMaterial[gl_VertexID].midtone = material.midtone;
     cachedMaterial[gl_VertexID].light   = material.light;
+#endif
 }
 
 void CacheReadMaterial()
 {
+#ifndef CANE_VERTEX_UBO_FALLBACK
     if (gl_VertexID < 0 || gl_VertexID >= cachedMaterial.length())
     {
         material.ambient = 0.0;
@@ -987,6 +1317,7 @@ void CacheReadMaterial()
     material.ambient = cachedMaterial[gl_VertexID].ambient;
     material.midtone = cachedMaterial[gl_VertexID].midtone;
     material.light   = cachedMaterial[gl_VertexID].light;
+#endif
 }
 
 void ProcessGlobLighting()

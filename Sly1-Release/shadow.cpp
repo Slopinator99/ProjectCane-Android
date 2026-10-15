@@ -2,7 +2,20 @@
 #include "dysh.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iostream>
+
+// §8.1 fallback (glob.h): std140 image of ACTIVESHADOWS for its uniform-block
+// declaration in glob.vert — int numActiveShadows @0, ivec4 shadowIdx4[64] @16.
+static constexpr size_t kActiveShadows140Size = 1040;
+static void PackActiveShadowsStd140(unsigned char* out)
+{
+	std::memset(out, 0, kActiveShadows140Size);
+	std::memcpy(out + 0, &activeShadows.numShadows, sizeof(int));
+	const int numShadows = (std::min)(activeShadows.numShadows, MAX_SHADOWS);
+	for (int i = 0; i < numShadows; ++i)
+		std::memcpy(out + 16 + i * 4, &activeShadows.shadowsIndices[i], sizeof(int));
+}
 
 namespace
 {
@@ -560,17 +573,23 @@ void AllocateShadows(SW* psw)
 	}
 
 	// ------------------------------------------------------------
-	// Main shadows SSBO
+	// Main shadows SSBO (uniform block in the §8.1 fallback)
 	// ------------------------------------------------------------
 	glGenBuffers(1, &shadowSsbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, shadowSsbo);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, shadowSsbo);
+	glBindBufferBase(g_fVertexUboFallback ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER,
+		4, shadowSsbo);
 
 	const GLsizeiptr headerSize = sizeof(SHADOWSSBOHEADER);
 	const GLsizeiptr shadowSize = sizeof(SHADOWBLK) * shadowBlk.size();
 	const GLsizeiptr totalSize = headerSize + shadowSize;
+	// The fallback declares SHADOW shadows[MAX_SHADOWS] (constant UBO size),
+	// so the buffer must cover the whole declared block.
+	const GLsizeiptr allocSize = g_fVertexUboFallback
+		? (std::max)(totalSize, (GLsizeiptr)(sizeof(SHADOWSSBOHEADER) + sizeof(SHADOWBLK) * MAX_SHADOWS))
+		: totalSize;
 
-	glBufferData(GL_SHADER_STORAGE_BUFFER, totalSize, nullptr, GL_DYNAMIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, allocSize, nullptr, GL_DYNAMIC_DRAW);
 
 	SHADOWSSBOHEADER header = {};
 	header.numShadows = (int)shadowBlk.size();
@@ -579,13 +598,21 @@ void AllocateShadows(SW* psw)
 	glBufferSubData(GL_SHADER_STORAGE_BUFFER, headerSize, shadowSize, shadowBlk.data());
 
 	// ------------------------------------------------------------
-	// Active-shadows SSBO
+	// Active-shadows SSBO (std140 image in the §8.1 fallback)
 	// ------------------------------------------------------------
 	glGenBuffers(1, &activeShadowsSsbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, activeShadowsSsbo);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, activeShadowsSsbo);
+	glBindBufferBase(g_fVertexUboFallback ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER,
+		5, activeShadowsSsbo);
 
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(ACTIVESHADOWS), &activeShadows, GL_DYNAMIC_DRAW);
+	if (g_fVertexUboFallback)
+	{
+		unsigned char packed[kActiveShadows140Size];
+		PackActiveShadowsStd140(packed);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(packed), packed, GL_DYNAMIC_DRAW);
+	}
+	else
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(ACTIVESHADOWS), &activeShadows, GL_DYNAMIC_DRAW);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
@@ -675,7 +702,14 @@ void PrepareSwShadows(SW *psw, CM *pcm)
 
 	// Update active shadow list
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, activeShadowsSsbo);
-	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(ACTIVESHADOWS), &activeShadows);
+	if (g_fVertexUboFallback)
+	{
+		unsigned char packed[kActiveShadows140Size];
+		PackActiveShadowsStd140(packed);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(packed), packed);
+	}
+	else
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(ACTIVESHADOWS), &activeShadows);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
