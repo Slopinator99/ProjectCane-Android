@@ -451,8 +451,14 @@ inline char g_aachzKeyboardBindings[BTN_MAX][64]{};
 
 inline const char* const s_apchzRespk9[2] =
 {
+#ifdef __ANDROID__
+    // "Exit Game" (closes the app) sits next to this entry in the pause menu, so say where this one goes.
+    "Quit to Title",
+    "Save and Quit to Title"
+#else
     "Quit Game",
     "Save and Quit"
+#endif
 };
 
 inline const char* const s_apchzRespk13[2] =
