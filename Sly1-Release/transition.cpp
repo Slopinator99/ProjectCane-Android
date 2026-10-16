@@ -7,6 +7,11 @@
 #include "spu_reverb_xapo.h"
 #include "../platform/platform.h"
 
+#ifdef __ANDROID__
+extern "C" void cane_state_apply_pending();
+extern "C" bool cane_state_pending();
+#endif
+
 namespace
 {
 const char* WorldDirectoryName(int levelId)
@@ -233,7 +238,23 @@ void CTransition::Execute(std::string& file)
         ResetCm(g_pcm, 1);
         UpdateSounds();
         //TeleportSwPlayer(g_psw, (OID)446, m_oidWarpContext);
+#ifdef __ANDROID__
+        if (cane_state_pending())
+        {
+            // Load State: no warp (its entrance sequence would move the player after we placed him), just the start player object
+            if (PpoCur() == nullptr)
+            {
+                PO* ppoStart = PpoStart();
+                if (ppoStart != nullptr)
+                    SwitchToPo(ppoStart);
+            }
+        }
+        else
+#endif
         TeleportSwPlayer(g_psw, m_oidWarp, m_oidWarpContext);
+#ifdef __ANDROID__
+        cane_state_apply_pending();   // Load State: put the player back where the state was taken
+#endif
         ResetGameAlarmsTriggered(&g_game);
         EnableHubCamera(&g_hubblot);
         RecalcSwXpAll(g_psw, 0);

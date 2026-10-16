@@ -105,10 +105,19 @@ This repository tracks `theclub654/ProjectCane`. Upstream changes are merged int
 and re-tested on device; `PORTING.md` lists what usually needs attention (shader and buffer
 layout changes, the data/extraction format, new window or input calls).
 
+## Resume and Save State (experimental)
+
+- **Resume:** leaving the app (Home, Exit Game, a checkpoint reached) stores the run; pressing Start on the title screen with the same
+  save slot picks it up at its last checkpoint, with the coins, clues and progress you had. Quitting to the title or starting a new
+  game drops it.
+- **Save State / Load State** in the pause menu: a snapshot of the current level (position, facing, game data and checkpoint progress).
+  One state slot per save slot, stored in `Saves/state.dat`. **Experimental:** so far it has only been tested in ordinary Sly-on-foot
+  levels. Vehicles, turrets and other special levels are untested and may not restore correctly. It does not replace the game's own saving.
+
 ## Roadmap
 
 Ideas, in no particular order (nothing here is promised):
-- **Auto-save and faster resume** when leaving the app (a true emulator-style save state is a research item).
+- **Save State polish:** testing in special levels (vehicles, turrets), several state slots, restoring the camera exactly.
 - **Dual-screen mode** for handhelds with two displays (for example the AYN Thor): game on one screen, controls or extras on the other.
 - **iOS port** (exploratory, not started): see `PORTING.md` for what it would take.
 

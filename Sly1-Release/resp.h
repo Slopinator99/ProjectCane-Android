@@ -106,8 +106,10 @@ enum RESPK : int
 	RESPK_TouchOpacity,
 	RESPK_TouchSize,
 	RESPK_TouchEdit,
+	RESPK_SaveState,     // Android: pause menu snapshot
+	RESPK_LoadState,
 
-	RESPK_Max = 84
+	RESPK_Max = 86
 };
 
 // -----------------------------------------------------------------------------
@@ -337,7 +339,7 @@ inline RESPK s_arespkKeyboardMapping[18] =
 // Pause menu
 // -----------------------------------------------------------------------------
 
-inline const RESPK s_arespkPauseMenuAll[9] =
+inline const RESPK s_arespkPauseMenuAll[11] =
 {
     RESPK_ReturnToGame,
     RESPK_RestartRace,
@@ -345,12 +347,14 @@ inline const RESPK s_arespkPauseMenuAll[9] =
     RESPK_RestartLevel,
     RESPK_Map,
     RESPK_Options,
+    RESPK_SaveState,
+    RESPK_LoadState,
     RESPK_ExitLevel,
     RESPK_Quit,
     RESPK_ExitToDesktop
 };
 
-inline RESPK s_arespkPauseMenu[9]{};
+inline RESPK s_arespkPauseMenu[11]{};
 
 // -----------------------------------------------------------------------------
 // Options menu
@@ -595,7 +599,9 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	g_achzRespkTouchMode,     // 80 RESPK_TouchMode
 	g_achzRespkTouchOpacity,  // 81 RESPK_TouchOpacity
 	g_achzRespkTouchSize,     // 82 RESPK_TouchSize
-	"Edit Touch Layout..."    // 83 RESPK_TouchEdit
+	"Edit Touch Layout...",   // 83 RESPK_TouchEdit
+	"Save State (experimental)", // 84 RESPK_SaveState
+	"Load State (experimental)"  // 85 RESPK_LoadState
 };
 
 // -----------------------------------------------------------------------------
@@ -666,7 +672,9 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr },           // 80 RESPK_TouchMode
 	{ 0, nullptr },           // 81 RESPK_TouchOpacity
 	{ 0, nullptr },           // 82 RESPK_TouchSize
-	{ 0, nullptr }            // 83 RESPK_TouchEdit
+	{ 0, nullptr },           // 83 RESPK_TouchEdit
+	{ 0, nullptr },           // 84 RESPK_SaveState
+	{ 0, nullptr }            // 85 RESPK_LoadState
 };
 
 // -----------------------------------------------------------------------------
@@ -677,7 +685,7 @@ inline RESPD s_arespd[RESPK_Max] =
 
 inline PRD s_mpprkprd[PRK_Max] =
 {
-    { "Paused", 1.0f, 1.0f, 1, 9, s_arespkPauseMenu },                                         // 0  PRK_PauseMenu
+    { "Paused", 1.0f, 1.0f, 1, 11, s_arespkPauseMenu },                                         // 0  PRK_PauseMenu
     { "Game Over. Try again?", 1.0f, 1.0f, 0, 2, s_arespkYesNo },                              // 1  PRK_GameOver
     { "Really Quit?", 1.0f, 1.0f, 0, 2, s_arespkYesNo },                                      // 2  PRK_QuitConfirm
     { pchzMemcardSaveCreate, 0.7f, 1.0f, 0, 2, s_arespkYesNo },                               // 3  PRK_MemcardMissing

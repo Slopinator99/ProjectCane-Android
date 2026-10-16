@@ -25,6 +25,11 @@
 extern "C" void cane_resume_save(const char* why);
 extern "C" void cane_resume_clear();
 extern "C" bool cane_resume_try_start();
+extern "C" bool cane_state_can_save();
+extern "C" bool cane_state_exists();
+extern "C" bool cane_state_save();
+extern "C" bool cane_state_load();
+extern "C" void cane_android_toast(const char* text);
 #endif
 #ifdef __ANDROID__
 extern "C" int cane_android_has_hw_keyboard();
@@ -551,6 +556,22 @@ void SetPromptPrk(PROMPT* pprompt)
 
                 case RESPK_RestartSprint:
                 include = g_note.mtsState == MTSSTATE_Active;
+                break;
+
+                case RESPK_SaveState:
+#ifdef __ANDROID__
+                include = cane_state_can_save();
+#else
+                include = false;
+#endif
+                break;
+
+                case RESPK_LoadState:
+#ifdef __ANDROID__
+                include = cane_state_can_save() && cane_state_exists();
+#else
+                include = false;
+#endif
                 break;
 
                 case RESPK_RestartLevel:
@@ -1099,6 +1120,19 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
                 case RESPK_RestartLevel: 
                 ExitOrRestartLevelFromPrompt(pprompt, true, WIPEK_Keyhole);
                 return;
+
+#ifdef __ANDROID__
+                case RESPK_SaveState:
+                SetPrompt(pprompt, PRP_Basic, PRK_Nil);
+                cane_android_toast(cane_state_save() ? "State saved" : "Could not save the state");
+                return;
+
+                case RESPK_LoadState:
+                SetPrompt(pprompt, PRP_Basic, PRK_Nil);
+                if (!cane_state_load())
+                    cane_android_toast("Could not load the state");
+                return;
+#endif
 
                 case RESPK_ExitLevel:
                 SetPrompt(pprompt, PRP_Basic, PRK_Nil);

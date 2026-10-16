@@ -14,6 +14,10 @@
 #include "ui.h"
 #include "wipe.h"
 #include "transition.h"
+#include "po.h"
+#include "cm.h"
+#include "xform.h"
+#include "math.h"
 #include "Input.h"
 #include "../platform/platform.h"
 
@@ -33,7 +37,7 @@
 namespace
 {
 constexpr char kMagic[8] = { 'P', 'C', 'A', 'N', 'E', 'R', 'S', 'M' };
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 
 struct ResumeHeader
 {
@@ -46,7 +50,27 @@ struct ResumeHeader
     int32_t oidWarp;
     int32_t oidWarpContext;
     uint32_t sizeofBits;
+    // Save State only: where Sly stood. The live (not just checkpointed) trigger bits follow the GS and the saved bits in the file.
+    int32_t fPlacement;
+    float pos[3];
+    float mat[9];
+    float vel[3];
 };
+
+// Placement waiting for the level to finish loading (applied right after the player is teleported to the warp).
+struct PendingState
+{
+    bool valid = false;
+    float pos[3]{};
+    float mat[9]{};
+    float vel[3]{};
+    CBitArray4096 bitsSaved{};   // the real checkpoint bits, put back once the live bits were restored
+} s_pending;
+
+std::filesystem::path StatePath()
+{
+    return cane::UserDirectory() / "Saves" / "state.dat";
+}
 
 std::filesystem::path ResumePath()
 {
@@ -96,7 +120,14 @@ extern "C" void cane_resume_clear()
         RESUME_LOG("[Resume] cleared");
 }
 
+static void WriteFile(const std::filesystem::path& path, const char* why, bool fState);
+
 extern "C" void cane_resume_save(const char* why)
+{
+    WriteFile(ResumePath(), why, false);
+}
+
+static void WriteFile(const std::filesystem::path& path, const char* why, bool fState)
 {
     const int slot = CurrentSlot();
     if (!FInRun() || slot < 0)
@@ -118,7 +149,24 @@ extern "C" void cane_resume_save(const char* why)
     header.oidWarpContext = static_cast<int32_t>(g_chkmgr.csSaved.oidWarpContext);
     header.sizeofBits = static_cast<uint32_t>(sizeof(CBitArray4096));
 
-    const std::filesystem::path path = ResumePath();
+    if (fState)
+    {
+        PO* const ppo = PpoCur();
+        if (ppo == nullptr)
+        {
+            RESUME_LOG("[State] not saving: no player object");
+            return;
+        }
+        glm::vec3 pos{};
+        glm::mat3 mat{ 1.0f };
+        pos = ppo->xf.posWorld;
+        mat = ppo->xf.matWorld;
+        header.fPlacement = 1;
+        std::memcpy(header.pos, &pos, sizeof(header.pos));
+        std::memcpy(header.mat, &mat, sizeof(header.mat));
+        std::memcpy(header.vel, &ppo->xf.v, sizeof(header.vel));
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     const std::filesystem::path temp = path.string() + ".part";
@@ -130,22 +178,20 @@ extern "C" void cane_resume_save(const char* why)
         out.write(reinterpret_cast<const char*>(&header), sizeof(header));
         out.write(reinterpret_cast<const char*>(g_pgsCur), sizeof(GS));
         out.write(reinterpret_cast<const char*>(&g_chkmgr.csSaved.abitChk), sizeof(CBitArray4096));
+        if (fState)
+            out.write(reinterpret_cast<const char*>(&g_chkmgr.abitChk), sizeof(CBitArray4096));
         if (!out)
             return;
     }
 
     std::filesystem::rename(temp, path, ec);   // never leave a half-written file behind
     if (!ec)
-        RESUME_LOG("[Resume] saved (%s): slot %d level 0x%x checkpoint %d", why != nullptr ? why : "?", slot, header.levelId, header.fCheckpoint);
+        RESUME_LOG("[Resume] saved%s (%s): slot %d level 0x%x checkpoint %d", fState ? " STATE" : "", why != nullptr ? why : "?", slot, header.levelId, header.fCheckpoint);
 }
 
-// Title screen, Start pressed, the slot's game state already loaded into *g_pgsCur. Returns true when it started the resume.
-extern "C" bool cane_resume_try_start()
+static bool LoadFile(const std::filesystem::path& path, bool fState)
 {
-    if (g_ui.uisPlaying != UIS_Attract)
-        return false;
-
-    std::ifstream in(ResumePath(), std::ios::binary);
+    std::ifstream in(path, std::ios::binary);
     if (!in)
         return false;
 
@@ -154,20 +200,23 @@ extern "C" bool cane_resume_try_start()
     if (!in || std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 || header.version != kVersion ||
         header.sizeofGs != sizeof(GS) || header.sizeofBits != sizeof(CBitArray4096))
     {
-        RESUME_LOG("[Resume] ignoring resume.dat (wrong format)");
+        RESUME_LOG("[Resume] ignoring save file (wrong format)");
         return false;
     }
 
     if (header.slot != CurrentSlot())
-        return false;   // the player picked a different slot: keep the file for its own slot
+        return false;   // another slot's run: keep the file for its own slot
 
     static GS s_gs;
     static CBitArray4096 s_bits;
+    static CBitArray4096 s_bitsLive;
     in.read(reinterpret_cast<char*>(&s_gs), sizeof(GS));
     in.read(reinterpret_cast<char*>(&s_bits), sizeof(CBitArray4096));
+    if (fState)
+        in.read(reinterpret_cast<char*>(&s_bitsLive), sizeof(CBitArray4096));
     if (!in)
     {
-        RESUME_LOG("[Resume] ignoring resume.dat (truncated)");
+        RESUME_LOG("[Resume] ignoring save file (truncated)");
         return false;
     }
 
@@ -176,7 +225,7 @@ extern "C" bool cane_resume_try_start()
     if (plevel == nullptr || gs.gameWorldCur < GAMEWORLD_Intro || gs.gameWorldCur >= GAMEWORLD_Max || gs.worldLevelCur < 0 ||
         gs.worldLevelCur >= 9 || ((static_cast<int>(gs.gameWorldCur) << 8) | static_cast<int>(gs.worldLevelCur)) != header.levelId)
     {
-        RESUME_LOG("[Resume] ignoring resume.dat (bad level)");
+        RESUME_LOG("[Resume] ignoring save file (bad level)");
         return false;
     }
 
@@ -184,10 +233,20 @@ extern "C" bool cane_resume_try_start()
     *g_pgsCur = s_gs;
     ApplyVibrationSetting(g_pgsCur);
 
-    g_chkmgr.csSaved.abitChk = s_bits;
+    g_chkmgr.csSaved.abitChk = fState ? s_bitsLive : s_bits;   // the level load restores the live bits from here...
     g_chkmgr.csSaved.oidWarp = static_cast<OID>(header.oidWarp);
     g_chkmgr.csSaved.oidWarpContext = static_cast<OID>(header.oidWarpContext);
     g_chkmgr.fCheckpoint = header.fCheckpoint != 0;
+
+    s_pending.valid = false;
+    if (fState && header.fPlacement != 0)
+    {
+        s_pending.valid = true;
+        std::memcpy(s_pending.pos, header.pos, sizeof(s_pending.pos));
+        std::memcpy(s_pending.mat, header.mat, sizeof(s_pending.mat));
+        std::memcpy(s_pending.vel, header.vel, sizeof(s_pending.vel));
+        s_pending.bitsSaved = s_bits;   // ...and the real checkpoint bits go back afterwards
+    }
 
     OnGameLoad(&g_game);
 
@@ -195,7 +254,7 @@ extern "C" bool cane_resume_try_start()
     TRANS trans{};
     trans.fSet = 1;
     trans.plevel = plevel;
-    if (g_chkmgr.fCheckpoint)
+    if (g_chkmgr.fCheckpoint || fState)
     {
         trans.oidWarp = g_chkmgr.csSaved.oidWarp;
         trans.oidWarpContext = g_chkmgr.csSaved.oidWarpContext;
@@ -209,6 +268,74 @@ extern "C" bool cane_resume_try_start()
     }
 
     ActivateWipe(&g_wipe, &trans, WIPEK_Keyhole);
-    RESUME_LOG("[Resume] resuming slot %d level 0x%x checkpoint %d", header.slot, header.levelId, header.fCheckpoint);
+    RESUME_LOG("[Resume] %s slot %d level 0x%x checkpoint %d", fState ? "loading STATE" : "resuming", header.slot, header.levelId, header.fCheckpoint);
     return true;
+}
+
+// Title screen, Start pressed, the slot's game state already loaded into *g_pgsCur. Returns true when it started the resume.
+extern "C" bool cane_resume_try_start()
+{
+    if (g_ui.uisPlaying != UIS_Attract)
+        return false;
+    return LoadFile(ResumePath(), false);
+}
+
+// ---- pause menu: Save State / Load State ----------------------------------------------------------------------------------
+
+extern "C" bool cane_state_can_save()
+{
+    return FInRun() && CurrentSlot() >= 0 && PpoCur() != nullptr && g_pgsCur->gameWorldCur != GAMEWORLD_Intro;
+}
+
+extern "C" bool cane_state_exists()
+{
+    std::ifstream in(StatePath(), std::ios::binary);
+    ResumeHeader header{};
+    in.read(reinterpret_cast<char*>(&header), sizeof(header));
+    return in && std::memcmp(header.magic, kMagic, sizeof(kMagic)) == 0 && header.version == kVersion && header.slot == CurrentSlot();
+}
+
+extern "C" bool cane_state_save()
+{
+    if (!cane_state_can_save())
+        return false;
+    WriteFile(StatePath(), "state", true);
+    return cane_state_exists();
+}
+
+extern "C" bool cane_state_load()
+{
+    return LoadFile(StatePath(), true);
+}
+
+extern "C" bool cane_state_pending()
+{
+    return s_pending.valid;
+}
+
+// Called by the level load right after the player was teleported to the warp: puts Sly back where the state was taken.
+extern "C" void cane_state_apply_pending()
+{
+    if (!s_pending.valid)
+        return;
+    s_pending.valid = false;
+
+    g_chkmgr.csSaved.abitChk = s_pending.bitsSaved;
+
+    PO* const ppo = PpoCur();
+    if (ppo == nullptr)
+        return;
+
+    glm::vec3 pos, vel;
+    glm::mat3 mat;
+    std::memcpy(&pos, s_pending.pos, sizeof(pos));
+    std::memcpy(&mat, s_pending.mat, sizeof(mat));
+    std::memcpy(&vel, s_pending.vel, sizeof(vel));
+
+    ppo->pvtalo->pfnRotateAloToMat(ppo, &mat);
+    TranslateSoToPosSafe(ppo, &pos, &g_normalZ);
+    ppo->pvtalo->pfnSetAloVelocityVec(ppo, &g_vecZero);   // start at rest: the saved velocity flung Sly upwards
+    ppo->pvtalo->pfnSetAloAngularVelocityVec(ppo, &g_vecZero);
+    SetCmCut(g_pcm, nullptr);
+    RESUME_LOG("[State] placed player at %.1f %.1f %.1f", pos.x, pos.y, pos.z);
 }

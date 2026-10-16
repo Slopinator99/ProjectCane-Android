@@ -425,6 +425,26 @@ const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int* c)
 	return g_videoModes.data();
 }
 
+// Short on-screen message (pause menu Save State feedback).
+extern "C" void cane_android_toast(const char* text)
+{
+	JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+	jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+	if (env == nullptr || activity == nullptr || text == nullptr)
+		return;
+	jclass cls = env->GetObjectClass(activity);
+	jmethodID m = env->GetMethodID(cls, "showToast", "(Ljava/lang/String;)V");
+	if (m != nullptr)
+	{
+		jstring str = env->NewStringUTF(text);
+		env->CallVoidMethod(activity, m, str);
+		env->DeleteLocalRef(str);
+	}
+	env->DeleteLocalRef(cls);
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+}
+
 // Asks Android to run the screen at (at least) hz; called whenever the game's frame-rate target changes.
 extern "C" void cane_android_request_refresh_rate(int hz)
 {

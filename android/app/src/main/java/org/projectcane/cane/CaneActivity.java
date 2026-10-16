@@ -22,6 +22,11 @@ public class CaneActivity extends SDLActivity {
         runOnUiThread(() -> startActivity(new Intent(this, SavesActivity.class)));
     }
 
+    /** Called from native code: a short message on top of the game. */
+    public void showToast(final String text) {
+        runOnUiThread(() -> android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show());
+    }
+
     /** Called from native code: the refresh rates (Hz, rounded) the screen can run at in its current resolution, ascending. */
     public int[] supportedRefreshRates() {
         try {
