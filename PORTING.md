@@ -285,17 +285,40 @@ to an issue. Code: `DebugLog.java`, `SavesActivity.java`.
 - A native crash writes `Logs/crash-<pid>.txt` (signal, fault address, backtrace as `libmain.so+offset`); keep the unstripped
   `libmain.so` of every release to decode it with `addr2line`.
 
-## Roadmap: iOS port (idea, not started)
-What carries over: the game code, SDL2 (it supports iOS), FAudio, an FFmpeg cross-build, the C++ BRX rebuilder and the on-screen controller
-(`platform/android/touch_overlay.*`, plain C++ over SDL touch events).
-What does not:
-- **Graphics.** iOS stops at OpenGL ES 3.0 and Apple deprecated it; the renderer here needs ES 3.2 features (shader storage buffers, transform
-  feedback bakes, base-vertex draws). Realistic routes: ANGLE (OpenGL ES on top of Metal), or a Metal / MoltenVK backend. The Adreno/Mali fallback
-  work in this repo (data textures instead of vertex-stage buffers) is a head start, because Metal-class GPUs have the same kind of limits.
-- **Data import.** The on-device ISO extractor and level rebuild driver are Java (`android/.../extract`); the iOS app needs them in C++ or Swift
-  (the BRX rebuilder itself is already portable C++).
-- **Platform shell.** A new Xcode project, file-picker import of the ISO, save backup/restore, haptics and lifecycle handling.
-- **Distribution.** Needs an Apple developer account or sideloading (no App Store route for this kind of project).
+## Roadmap: iOS port (planned, not started)
+
+**Targets:** iPhone and iPad, sideloaded (AltStore / Sideloadly from Windows, free Apple ID, re-signed every 7 days). No App Store route.
+**Build constraint:** there is no Mac, so the iOS build runs on GitHub-hosted macOS runners (free for a public repository): CI builds an unsigned
+`.ipa`, you sideload it. Every test is a CI round trip (build, download, sideload, run), so the plan front-loads work that can be checked on
+Windows/Android and keeps device-only questions few and small. Crash and log output come from the app's own debug log (exported to the Files app)
+and `idevicesyslog` on Windows; there is no live debugger.
+
+What carries over: the game code, SDL2 (supports iOS), FAudio (SDL audio, CoreAudio underneath), FFmpeg (cross-build in CI), the C++ BRX rebuilder, the
+on-screen controller (`platform/android/touch_overlay.*`, plain C++ over SDL touch events), the Adreno/Mali "portable shader" path (data textures
+instead of vertex-stage buffers, `CANE_PORTABLE_SHADERS`), the GLFW-on-SDL shim (`glfw_sdl.cpp`; its JNI parts need iOS counterparts).
+
+### Phases
+0. **Shared code first (checkable on Windows/Android).** Move the Java-only import code (ISO extractor, level rebuild driver, cutscene art) into
+   C++ behind a small platform interface; Android keeps working, iOS gets it for free. Split `platform/android` into a shared SDL part and
+   Android-only (JNI) parts. Add `platform/ios` stubs for: toast, open-file picker, refresh rate, share/export of logs and saves.
+1. **CI and a hello-world.** A macOS workflow that builds SDL2 + a triangle for iPhone/iPad, produces an unsigned IPA artifact, and an `idevicesyslog`
+   recipe. Proves the pipeline (toolchain, signing via Sideloadly, running on a real device) before any game code is involved.
+2. **Renderer on ANGLE/Metal.** iOS only offers OpenGL ES 3.0 (deprecated); the engine wants ES 3.2 features. ANGLE (ES on top of Metal) is the
+   realistic route. Things to prove in a small spike: `glDrawElementsBaseVertex` (`EXT_draw_elements_base_vertex`), transform feedback bakes (ES 3.0,
+   fine), `glDrawElementsInstancedBaseInstance`, `glMemoryBarrier` and the SSBO uses (`alo.cpp`, `glob.cpp`: the portable path already avoids vertex-stage
+   SSBOs), MSAA renderbuffers, `glPolygonMode`/`glDrawBuffer` call sites that desktop GL allows but ES does not. Fallback if ANGLE cannot do it: a
+   Metal backend for the renderer (large) or per-draw emulation of the missing calls.
+3. **Game on iOS.** Data import via the Files picker (ISO is about 4 GB: stream it, never load it whole), extraction and BRX rebuild into the app's
+   Documents folder, FFmpeg build for cutscenes, audio, GameController input through SDL (MFi / Backbone pads), on-screen controller, haptics
+   (CoreHaptics through SDL), safe areas (notch / Dynamic Island / home indicator) and ProMotion 120 Hz (`CADisableMinimumFrameDuration`).
+4. **Polish and docs.** App icon, background/foreground handling (state save on `SDL_APP_WILLENTERBACKGROUND`, already wired), saves backup/restore through
+   the Files app, README section with the sideloading steps and the 7-day re-sign caveat.
+
+### Risks
+- ANGLE-on-iOS feature gaps (see phase 2); building ANGLE itself is heavy (depot_tools, gn), so prefer a prebuilt xcframework if a trustworthy one exists.
+- No debugger or GPU profiler: shader/GL errors must be logged in-app (the `debug.cane.glerr`-style switches exist for Android; mirror them).
+- CI minutes and the slow feedback loop; mitigate by batching changes per run and keeping the shared code testable on Android.
+- Apple restrictions on JIT/dynamic code are not a problem here (no JIT), but the 7-day free-account signing and the 3-app limit are real.
 
 ## High refresh rates (0.4.1-android.2+)
 `glfwGetVideoModes` (platform/android/glfw_sdl.cpp) asks `CaneActivity.supportedRefreshRates()` for the rates the screen supports at its current
