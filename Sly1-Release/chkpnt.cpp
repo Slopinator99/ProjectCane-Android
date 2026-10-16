@@ -336,6 +336,10 @@ void ResetChkmgrCheckPoints(CHKMGR* pchkmgr)
 	pchkmgr->csSaved.oidWarp = OID_Nil;
 }
 
+#ifdef __ANDROID__
+extern "C" void cane_resume_save(const char* why);
+#endif
+
 void SaveChkmgrCheckpoint(CHKMGR* pchkmgr, OID oidWarp, OID oidWarpContext)
 {
 	pchkmgr->fChkDirty = false;
@@ -344,6 +348,9 @@ void SaveChkmgrCheckpoint(CHKMGR* pchkmgr, OID oidWarp, OID oidWarpContext)
 	pchkmgr->csSaved.oidWarp = oidWarp;
 	pchkmgr->csSaved.oidWarpContext = oidWarpContext;
 	pchkmgr->fCheckpoint = true;
+#ifdef __ANDROID__
+	cane_resume_save("checkpoint");
+#endif
 }
 
 void ReturnChkmgrToCheckpoint(CHKMGR* pchkmgr)

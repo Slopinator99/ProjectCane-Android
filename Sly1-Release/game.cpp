@@ -5,6 +5,12 @@
 #include "debug.h"
 #include "fmv.h"
 
+#ifdef __ANDROID__
+extern "C" void cane_resume_save(const char* why);
+extern "C" void cane_resume_clear();
+extern "C" bool cane_resume_try_start();
+#endif
+
 void StartupGame()
 {
     StartGame();
@@ -299,12 +305,20 @@ void RetryGame()
 
 void StartGame()
 {
+#ifdef __ANDROID__
+    cane_resume_clear();   // a new game is not a resume
+#endif
     UnloadGame();
     WipeToWorldWarp("Splash.brx", (OID)-1, WIPEK_Fade);
 }
 
 void ReloadCurrentLevel()
 {
+#ifdef __ANDROID__
+    if (cane_resume_try_start())   // title screen, Start: pick the run up at its last checkpoint
+        return;
+#endif
+
     const int levelID =
         (static_cast<int>(g_pgsCur->gameWorldCur) << 8) |
         static_cast<int>(g_pgsCur->worldLevelCur);

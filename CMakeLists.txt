@@ -159,6 +159,9 @@ endif()
 
 if(ANDROID)
     # SDL's Java activity loads libmain.so and calls SDL_main.
+if(CANE_GLES)
+    list(APPEND game_sources "Sly1-Release/resume_state.cpp")   # Android: resume where you left off
+endif()
     add_library(ProjectCane SHARED ${game_sources} "${imgui_root}/imgui_demo.cpp")
     set_target_properties(ProjectCane PROPERTIES OUTPUT_NAME main)
 else()

@@ -20,6 +20,12 @@
 #include <cstdio>
 #include <iterator>
 #include <vector>
+
+#ifdef __ANDROID__
+extern "C" void cane_resume_save(const char* why);
+extern "C" void cane_resume_clear();
+extern "C" bool cane_resume_try_start();
+#endif
 #ifdef __ANDROID__
 extern "C" int cane_android_has_hw_keyboard();
 extern "C" void cane_android_open_saves_screen();
@@ -1382,7 +1388,12 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
 
 		case PRK_ExitToDesktopConfirm:
 		if (response == RESPK_Yes)
+		{
+#ifdef __ANDROID__
+			cane_resume_save("exit");
+#endif
 			fQuitGame = true;
+		}
 		else
 			SetPrompt(pprompt, PRP_Basic, PRK_PauseMenu);
 		return;
@@ -1969,6 +1980,9 @@ void ExitOrRestartLevelFromPrompt(PROMPT* pprompt, int fRestartLevel, WIPEK wipe
 
 void WipeToTitleScreen()
 {
+#ifdef __ANDROID__
+    cane_resume_clear();   // leaving a run on purpose: nothing to resume
+#endif
     LEVELINFO* plevelSplash = PlevelinfoFromSearchKey(21);
 
     if (plevelSplash == nullptr)

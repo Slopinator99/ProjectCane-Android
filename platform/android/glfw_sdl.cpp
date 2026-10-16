@@ -17,6 +17,9 @@
 #include "imgui/imgui.h"
 #include "touch_overlay.h"
 
+// resume state (Sly1-Release/resume_state.cpp): saved when the app goes to the background
+extern "C" void cane_resume_save(const char* why);
+
 namespace {
 
 struct Win { SDL_Window* sdl = nullptr; SDL_GLContext ctx = nullptr; bool shouldClose = false;
@@ -156,6 +159,11 @@ void Handle(const SDL_Event& e)
 	case SDL_JOYDEVICEREMOVED:
 		CANE_DIAG_LOG("[Input] joystick removed id=%d", e.jdevice.which);
 		ClosePad(e.jdevice.which); break;
+	case SDL_APP_WILLENTERBACKGROUND:
+	case SDL_APP_TERMINATING:
+	case SDL_APP_LOWMEMORY:
+		cane_resume_save("background");
+		break;
 	case SDL_WINDOWEVENT:
 		if (g_win && g_win->fbCb && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
 			int w = 0, h = 0; SDL_GL_GetDrawableSize(g_win->sdl, &w, &h);
