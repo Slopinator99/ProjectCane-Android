@@ -320,6 +320,16 @@ instead of vertex-stage buffers, `CANE_PORTABLE_SHADERS`), the GLFW-on-SDL shim 
 - CI minutes and the slow feedback loop; mitigate by batching changes per run and keeping the shared code testable on Android.
 - Apple restrictions on JIT/dynamic code are not a problem here (no JIT), but the 7-day free-account signing and the 3-app limit are real.
 
+## Roadmap: integrated updater (idea, not started)
+- **Check:** `GET https://api.github.com/repos/Slopinator99/ProjectCane-Android/releases/latest` (public, no token); compare `tag_name` against
+  `BuildConfig.VERSION_NAME`. The app currently declares no `INTERNET` permission, so this is the first network access: make it opt-in (an Options entry,
+  off by default, plus a "Check now" button) and say so in the README.
+- **Download:** the `.apk` and `.apk.sha256.txt` assets into the app cache; verify the SHA-256 before installing.
+- **Install:** hand the APK to Android's `PackageInstaller` (needs `REQUEST_INSTALL_PACKAGES`; the user grants "install unknown apps" for the app once and
+  confirms each install). Updates keep saves and data because the release key stays the same; Android refuses an APK signed with a different key.
+- **Open questions:** where the UI lives (the Java import/saves screens rather than the in-game menus), rate limiting (one check per day, `ETag`), and what to
+  do on devices where installing from the app is blocked (fall back to opening the Releases page in the browser).
+
 ## High refresh rates (0.4.1-android.2+)
 `glfwGetVideoModes` (platform/android/glfw_sdl.cpp) asks `CaneActivity.supportedRefreshRates()` for the rates the screen supports at its current
 resolution, so the Frame Rate option (`SupportedFrameRates` in prompt.cpp) lists them. When the game's frame-rate target changes, `FramePacer::Wait`

@@ -139,6 +139,7 @@ they take priority over the generated ones. The second screen never takes input 
 ## Roadmap
 
 Ideas, in no particular order (nothing here is promised):
+- **Integrated updater:** check this repository's Releases from inside the app and offer to download and install a newer version (opt-in, checksum verified, same signing key).
 - **Second screen extras:** touch buttons (Save State, Load State, map) on the second display.
 - **Save State polish:** testing in special levels (vehicles, turrets), several state slots, restoring the camera exactly.
 - **Dual-screen mode** for handhelds with two displays (for example the AYN Thor): game on one screen, controls or extras on the other.
