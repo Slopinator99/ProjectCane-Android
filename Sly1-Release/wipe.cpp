@@ -1,4 +1,5 @@
 #include "wipe.h"
+#include "letterbox.h"
 #include "keyhole.h"
 #include "dialog.h"
 #include "wm.h"
@@ -249,6 +250,7 @@ void SetWipeWipes(WIPE* pwipe, WIPES wipes)
     {
         pwipe->uBlack = 0.0f;
         pwipe->wipes = static_cast<WIPES>(0);
+        ReassertLetterboxAfterWipe();
     }
     else if (wipes == static_cast<WIPES>(2))
     {

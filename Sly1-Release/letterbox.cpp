@@ -1,6 +1,23 @@
 #include "letterbox.h"
 #include "binoc.h"
 #include "totals.h"
+#include "sw.h"
+
+// A request to show the bars that arrives while a same-world wipe is wiping in is swallowed below (retail hides them for that phase).
+// On fast hardware the Hideout welcome dialog starts inside that phase, and nothing asked again once the wipe was over, so the bars
+// never came back. Remember the swallowed request and replay it when the wipe ends.
+static bool s_fLetterboxShowDeferred = false;
+
+void ReassertLetterboxAfterWipe()
+{
+    if (!s_fLetterboxShowDeferred)
+        return;
+
+    s_fLetterboxShowDeferred = false;
+
+    if (g_psw != nullptr && g_psw->cLetterbox > 0 && g_letterbox.blots == BLOTS_Hidden)
+        g_letterbox.pvtblot->pfnShowBlot(&g_letterbox);
+}
 
 void StartupLetterbox(LETTERBOX *pletterbox)
 {
@@ -30,6 +47,9 @@ void SetLetterboxBlots(LETTERBOX* pletterbox, BLOTS blots)
     if (g_wipe.wipes == 3 && (blots == BLOTS_Appearing || blots == BLOTS_Visible))
     {
         blots = BLOTS_Hidden;
+
+        if (g_transition.m_grftrans & 8)
+            s_fLetterboxShowDeferred = true;
 
         if (!(g_transition.m_grftrans & 8))
         {
