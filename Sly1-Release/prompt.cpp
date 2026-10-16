@@ -597,6 +597,9 @@ void SetPromptPrk(PROMPT* pprompt)
 #ifndef __ANDROID__
             else if (response == RESPK_BackupSaves)
                 include = false;
+#else
+            else if (response == RESPK_AutoIconify)
+                include = false;   // desktop window behaviour: Android decides what happens when the app loses focus
 #endif
 
             if (include &&prd.crespk < static_cast<int>(std::size(s_arespkOptionsMenu)))
@@ -620,7 +623,7 @@ void SetPromptPrk(PROMPT* pprompt)
 				continue;
 #endif
 #ifdef __ANDROID__
-			if (response == RESPK_MouseCamera || response == RESPK_DisableControllerWhenUnfocused)
+			if (response == RESPK_MouseCamera || response == RESPK_MouseSensitivity || response == RESPK_DisableControllerWhenUnfocused)
 				continue;
 			if (response == RESPK_KeyboardMapping && !FKeyboardAvailable())
 				continue;
@@ -638,7 +641,7 @@ void SetPromptPrk(PROMPT* pprompt)
 		for (RESPK response : s_arespkVideoMenuAll)
 		{
 #ifdef __ANDROID__
-			if (response == RESPK_WindowMode || response == RESPK_Vsync)
+			if (response == RESPK_WindowMode || response == RESPK_Monitor || response == RESPK_Vsync)
 				continue;
 #endif
 			prd.arespk[prd.crespk++] = response;

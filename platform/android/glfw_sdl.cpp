@@ -175,7 +175,9 @@ Pad* PadFor(int jid) { return (jid >= 0 && jid < kMaxPads && g_pads[jid].js) ? &
 
 extern "C" {
 
+#include <sys/system_properties.h>
 extern "C" void cane_install_crash_handler(const char* logsDir);
+extern int g_caneNoPrebake;   // render.cpp; 1 = run the lighting bakes inside the scene passes (A/B knob for Adreno)
 
 int glfwInit(void)
 {
@@ -185,6 +187,12 @@ int glfwInit(void)
 		static char logs[512];
 		if (base != nullptr) snprintf(logs, sizeof(logs), "%s/Logs", base); else logs[0] = 0;
 		cane_install_crash_handler(logs);
+	}
+	{
+		// debug.* system properties can be set from a PC (adb shell setprop debug.cane.noprebake 1) on any build
+		char v[PROP_VALUE_MAX] = {0};
+		__system_property_get("debug.cane.noprebake", v);
+		g_caneNoPrebake = v[0] ? atoi(v) : 0;
 	}
 	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");   // see OpenPad()
