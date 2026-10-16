@@ -970,6 +970,33 @@ static void CaneCheckGlError(const char* where, const GLOB* pglob, int trlk, int
 		}
 	}
 }
+static bool s_firstBakeThisFrame = false;
+// A tiny framebuffer that only exists so the bake pre-pass can run in a render pass of its own (tile-based GPUs end the scene's
+// pass when the framebuffer changes, so the scene pass then contains no transform-feedback draws at all).
+static GLuint s_bakeFbo = 0;
+static GLuint s_bakeTex = 0;
+static GLuint EnsureBakeFbo()
+{
+	if (s_bakeFbo != 0)
+		return s_bakeFbo;
+	glGenTextures(1, &s_bakeTex);
+	glBindTexture(GL_TEXTURE_2D, s_bakeTex);
+	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glGenFramebuffers(1, &s_bakeFbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, s_bakeFbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_bakeTex, 0);
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glDeleteFramebuffers(1, &s_bakeFbo);
+		glDeleteTextures(1, &s_bakeTex);
+		s_bakeFbo = 0;
+		s_bakeTex = 0;
+		return 0;
+	}
+	return s_bakeFbo;
+}
 static std::unordered_set<const GLOB*> s_preBaked;
 static std::unordered_set<const GLOB*> s_bakeInline;
 static bool FNeedsInlineBake(const GLOB* pglob)
@@ -977,6 +1004,32 @@ static bool FNeedsInlineBake(const GLOB* pglob)
 	return !s_bakesDone || s_bakeInline.count(pglob) != 0 || s_preBaked.count(pglob) == 0;
 }
 static void BakeGlobSubLighting(GLOB* pglob, const SUBGLOB& sub);
+
+int g_caneTrace = 0;   // debug.cane.trace 1: log every change of a lit glob's bake state (see PORTING.md)
+static void CaneTraceGlob(const RPL* prpl, bool fBakeOnly)
+{
+	const GLOB* pglob = prpl->pglob;
+	if (!g_caneTrace || pglob == nullptr || pglob->fThreeWay != 1 || pglob->ssboCachedMaterial == 0)
+		return;
+	struct State { int v[11]; bool operator!=(const State& o) const { return memcmp(v, o.v, sizeof(v)) != 0; } };
+	static std::unordered_map<uint64_t, State> s_last;
+	static int s_lines = 0;
+	const State s = {{ (int)prpl->ro.trlk, (int)pglob->trlk, (int)pglob->bakeAttribsSet, (int)s_preBaked.count(pglob),
+		(int)s_bakeInline.count(pglob), (int)prpl->fQueuedCacheWrite, (int)prpl->ro.blotTvLight, (int)prpl->rp,
+		(int)prpl->ro.fDynamic, (int)s_bakesDone, (int)prpl->ro.fDynamicLight }};
+	const uint64_t key = reinterpret_cast<uint64_t>(pglob) * 4 + (fBakeOnly ? 1u : 0u) + (prpl->rp == RP_Translucent ? 2u : 0u);
+	auto it = s_last.find(key);
+	if (it != s_last.end() && !(it->second != s))
+		return;
+	s_last[key] = s;
+	if (s_lines >= 6000)
+		return;
+	++s_lines;
+#ifdef __ANDROID__
+	__android_log_print(ANDROID_LOG_INFO, "cane", "[TRACE] cf=%d %s glob=%p alo=%p verts=%d rp=%d ro.trlk=%d glob.trlk=%d attribs=%d preBaked=%d inline=%d queued=%d tv=%d dyn=%d bakesDone=%d dynLight=%d",
+		g_cframe, fBakeOnly ? "PRE " : "DRAW", (const void*)pglob, (const void*)prpl->palo, pglob->poseVertexCount, s.v[7], s.v[0], s.v[1], s.v[2], s.v[3], s.v[4], s.v[5], s.v[6], s.v[8], s.v[9], s.v[10]);
+#endif
+}
 
 static void DrawGlobImpl(RPL* prpl, bool fBakeOnly);
 
@@ -986,13 +1039,22 @@ static void PreBakeGlob(RPL* prpl)
 	if (pglob == nullptr || pglob->ssboCachedMaterial == 0 || pglob->fThreeWay != 1 || prpl->ro.trlk != TRLK_Relight)
 		return;
 
-	if (!pglob->bakeAttribsSet && (g_caneBisect & 16))
+	// Experiments (debug.cane.bisect): never-baked globs bake inline, either all of them (16) or only those in one pass:
+	// 512 translucent, 1024 cutout, 2048 opaque.
+	const bool fInlineFirst = (g_caneBisect & 16) ||
+		((g_caneBisect & 512) && prpl->rp == RP_Translucent) ||
+		((g_caneBisect & 1024) && prpl->rp == RP_Cutout) ||
+		((g_caneBisect & 2048) && prpl->rp == RP_Opaque);
+	if (!pglob->bakeAttribsSet && fInlineFirst)
 	{
 		// Experiment (debug.cane.bisect 16): never baked before, so its first bake happens right before its own draw, not here.
 		// Off by default: inline first bakes bring back the Adreno wrong-frame glitch in big levels.
 		s_bakeInline.insert(pglob);
 		return;
 	}
+	const bool fFirstBake = !pglob->bakeAttribsSet;
+	if (fFirstBake)
+		s_firstBakeThisFrame = true;
 	if (!s_preBaked.insert(pglob).second)
 		s_bakeInline.insert(pglob);   // second packet for the same glob this frame: its draws bake for themselves
 
@@ -1000,6 +1062,8 @@ static void PreBakeGlob(RPL* prpl)
 	if (g_caneGlErr)
 		while (glGetError() != GL_NO_ERROR) {}
 	DrawGlobImpl(prpl, true);
+	if (fFirstBake && (g_caneBisect & 32))
+		DrawGlobImpl(prpl, true);   // experiment: bake a never-baked glob twice
 	CaneCheckGlError("prebake", pglob, (int)prpl->ro.trlk, -1);
 }
 
@@ -1143,12 +1207,27 @@ void DrawSw(SW* psw, CM* pcm)
 	BindSwShadowTextures(psw);
 
 	s_bakesDone = false;
+	s_firstBakeThisFrame = false;
 	s_preBaked.clear();
 	s_bakeInline.clear();
 	if (g_fVertexUboFallback && g_fBakePrepass && !g_caneNoPrebake)
 	{
+		// The bakes run in a render pass of their own (default); debug.cane.bisect 8192 puts them back into the scene pass.
+		const GLuint bakeFbo = (g_caneBisect & 8192) ? 0 : EnsureBakeFbo();
+		if (bakeFbo != 0)
+			glBindFramebuffer(GL_FRAMEBUFFER, bakeFbo);
 		PreBakeAll();
+		if (bakeFbo != 0)
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, g_sceneFbo);
+			glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
+		}
 		s_bakesDone = true;
+		// Experiments: make sure the first bakes of new globs are complete before anything reads them.
+		if (s_firstBakeThisFrame && (g_caneBisect & 128))
+			glFinish();
+		else if (s_firstBakeThisFrame && (g_caneBisect & 256))
+			glFlush();
 	}
 
 	if (g_backGroundCount > 0)
@@ -1801,6 +1880,7 @@ void DrawGlob(RPL* prpl)
 static void DrawGlobImpl(RPL* prpl, bool fBakeOnly)
 {
 	GLOB* pglob = prpl->pglob;
+	CaneTraceGlob(prpl, fBakeOnly);
 	const bool fDebugWireframe = !fBakeOnly && g_fDebugObjectInspector &&
 		g_paloDebugSelected != nullptr && prpl->palo == g_paloDebugSelected;
 	const bool fQueuedCacheWrite = prpl->fQueuedCacheWrite;

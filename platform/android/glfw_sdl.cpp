@@ -179,7 +179,8 @@ extern "C" {
 extern "C" void cane_install_crash_handler(const char* logsDir);
 extern int g_caneNoPrebake;
 extern int g_caneGlErr;
-extern int g_caneBisect;   // render.cpp; 1 = run the lighting bakes inside the scene passes (A/B knob for Adreno)
+extern int g_caneBisect;
+extern int g_caneTrace;   // render.cpp; 1 = run the lighting bakes inside the scene passes (A/B knob for Adreno)
 
 int glfwInit(void)
 {
@@ -201,6 +202,9 @@ int glfwInit(void)
 		char b[PROP_VALUE_MAX] = {0};
 		__system_property_get("debug.cane.bisect", b);
 		g_caneBisect = b[0] ? atoi(b) : 0;
+		char tr[PROP_VALUE_MAX] = {0};
+		__system_property_get("debug.cane.trace", tr);
+		g_caneTrace = tr[0] ? atoi(tr) : 0;
 	}
 	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");   // see OpenPad()

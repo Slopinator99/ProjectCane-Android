@@ -268,16 +268,20 @@ to an issue. Code: `DebugLog.java`, `SavesActivity.java`.
 - The pre-pass (`PreBakeAll`) runs `DrawGlob`'s own set-up in a bake-only mode (`DrawGlobImpl(prpl, true)`), so the bake sees the same
   bones, poses, warp state, materials, lights and shadows as the inline bake did. Blend state and the cache bookkeeping are left to the
   real draw.
-- First-time globs ARE pre-baked (default). Making their first bake inline (`debug.cane.bisect 16`) removes a multi-frame flicker seen the first
-  time objects come into view in the Hideout, but it brings the original Adreno wrong-frame glitch back in big levels (Paris) because many globs
-  bake for the first time there. The Hideout flicker is therefore still open (see the 2026-10-16 notes in the repo history).
-  A glob that appears in two packets in one frame is baked inline.
+- **The bake pre-pass runs in a render pass of its own** (default): `DrawSw` binds a 1x1 dummy framebuffer for `PreBakeAll()` and then
+  restores the scene framebuffer and viewport, so on the tile-based Adreno the scene pass contains no transform-feedback draw at all.
+  This is what removed the Hideout first-view flicker (objects baking for the first time while the camera turned toward the level map)
+  without bringing back the original wrong-frame glitch. Inline first bakes (`debug.cane.bisect 16`) also remove the flicker but bring the
+  glitch back in big levels (Paris). `debug.cane.bisect 8192` puts the pre-pass back into the scene pass.
+  Ruled out while finding this: a `glFinish`/`glFlush` after the pre-pass (128/256), baking first-time globs twice (32), and inline first
+  bakes limited to one pass (512 translucent, 1024 cutout, 2048 opaque; 2560 = opaque + translucent works but is the same trade-off as 16).
+  A glob that appears in two packets in one frame is still baked inline.
 - Title-screen glitch counts used to choose this (detector `debug.cane.capture -1`-style, 25 s, Thor): pre-pass off 3, first bakes inline 1,
   first bakes in the pre-pass 0 (but with the Hideout flicker). The two spikes near the start of the intro are scripted camera cuts and show
   up in every configuration.
 - Switches readable on every build (set with `adb shell setprop`, read once at start-up):
   `debug.cane.noprebake 1` (bake inside the scene passes), `debug.cane.glerr 1` (log GL errors after the pre-pass and glob draws to the
-  session log), `debug.cane.bisect <mask>` (1 no pose-weight upload, 2 no poses, 4 no cel borders, 16 first bakes inline instead of in the pre-pass; 8 is unused).
+  session log), `debug.cane.bisect <mask>` (1 no pose-weight upload, 2 no poses, 4 no cel borders, 16 first bakes inline; 32/128/256/512/1024/2048 experiments, see above; 4096 unused; 8192 no own render pass for the pre-pass).
 - A native crash writes `Logs/crash-<pid>.txt` (signal, fault address, backtrace as `libmain.so+offset`); keep the unstripped
   `libmain.so` of every release to decode it with `addr2line`.
 
