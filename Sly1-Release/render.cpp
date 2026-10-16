@@ -1,4 +1,8 @@
+#include <unordered_set>
 #include "render.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #if defined(__ANDROID__) && defined(CANE_DIAG)
 #include <android/log.h>
 #include <chrono>
@@ -944,7 +948,37 @@ int g_caneNoBake = 0;   // debug.cane.nobake 1: relight every draw instead of re
 // Fallback bake pre-pass. Every transform-feedback bake of the frame runs here, before the first scene draw, so
 // no transform-feedback draw ever sits between two scene draws (Adreno draws such frames wrongly now and then).
 static bool s_bakesDone = false;
+// The cache is one buffer per glob, so the pre-pass is only right for a glob that is drawn once per frame. A glob that
+// shows up in two packets (room + an in-game screen/map view, different lighting) or never reached the pre-pass must be
+// baked right before its draw, as before the pre-pass existed.
+int g_caneBisect = 0;   // debug.cane.bisect bitmask (developer A/B switches, see PORTING.md)
+int g_caneGlErr = 0;   // debug.cane.glerr 1: log OpenGL errors right after the bake pre-pass and after glob draws
+static int s_glErrLogged = 0;
+static void CaneCheckGlError(const char* where, const GLOB* pglob, int trlk, int sub)
+{
+	if (!g_caneGlErr)
+		return;
+	for (GLenum e = glGetError(); e != GL_NO_ERROR; e = glGetError())
+	{
+		if (s_glErrLogged < 200)
+		{
+			++s_glErrLogged;
+#ifdef __ANDROID__
+			__android_log_print(ANDROID_LOG_WARN, "cane", "[GLERR] %s err=0x%x glob=%p trlk=%d sub=%d bakeAttribs=%d cf=%d",
+				where, e, (const void*)pglob, trlk, sub, pglob != nullptr ? (int)pglob->bakeAttribsSet : -1, g_cframe);
+#endif
+		}
+	}
+}
+static std::unordered_set<const GLOB*> s_preBaked;
+static std::unordered_set<const GLOB*> s_bakeInline;
+static bool FNeedsInlineBake(const GLOB* pglob)
+{
+	return !s_bakesDone || s_bakeInline.count(pglob) != 0 || s_preBaked.count(pglob) == 0;
+}
 static void BakeGlobSubLighting(GLOB* pglob, const SUBGLOB& sub);
+
+static void DrawGlobImpl(RPL* prpl, bool fBakeOnly);
 
 static void PreBakeGlob(RPL* prpl)
 {
@@ -952,42 +986,20 @@ static void PreBakeGlob(RPL* prpl)
 	if (pglob == nullptr || pglob->ssboCachedMaterial == 0 || pglob->fThreeWay != 1 || prpl->ro.trlk != TRLK_Relight)
 		return;
 
-	BindFrameStreamRange(&ropStream, prpl->streamOffset, sizeof(ROGL));
-
-	GLOBSET* pglobset = prpl->palo != nullptr ? &prpl->palo->globset : nullptr;
-	const bool fHasBones = pglobset != nullptr && pglobset->cbnd > 0 && pglobset->boneMatrixSSBO != 0;
-	const bool fHasPoses = pglobset != nullptr && pglob->poseCount > 0 && pglob->poseDposSSBO != 0 && pglob->poseDnormalSSBO != 0 &&
-		pglobset->agPoses.size() >= static_cast<size_t>(pglob->poseCount);
-
-	glUniform1i(glslfPose, fHasPoses ? 1 : 0);
-	if (fHasBones)
-		BindShaderStorageBuffer(9, pglobset->boneMatrixSSBO);
-	if (fHasPoses)
+	if (!pglob->bakeAttribsSet && !(g_caneBisect & 8))
 	{
-		BindShaderStorageBuffer(10, pglob->poseDposSSBO);
-		BindShaderStorageBuffer(11, pglob->poseDnormalSSBO);
-		glUniform1i(glslPoseCount, pglob->poseCount);
-		glUniform1fv(glslPoseWeights, (std::min)(pglob->poseCount, 64), pglobset->agPoses.data());
+		// Never baked before: its first bake happens right before its own draw (the way it always worked), not here.
+		s_bakeInline.insert(pglob);
+		return;
 	}
+	if (!s_preBaked.insert(pglob).second)
+		s_bakeInline.insert(pglob);   // second packet for the same glob this frame: its draws bake for themselves
 
-	BindVertexArray(pglob->VAO);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, pglob->EBO);
-
-	for (const SUBGLOB& sub : pglob->asubglob)
-	{
-		glUniform1i(glslRko, 1);   // the shader only runs the three-way lighting when rko says so
-		glUniform1i(glslfSkin, fHasBones && sub.cibnd > 0 ? 1 : 0);
-		if (activeShadows.numShadows > 0)
-		{
-			const glm::vec4 subGlobPosCenter = prpl->ro.model * glm::vec4(sub.posCenter, 1.0f);
-			glUniform3f(glslSubGlobPosCenter, subGlobPosCenter.x, subGlobPosCenter.y, subGlobPosCenter.z);
-			glUniform1f(glslSubGlobRadius, pglob->rSubglobRadius * sub.sRadius);
-		}
-		glUniform1f(glslUnSelfIllum, sub.unSelfIllum);
-		BakeGlobSubLighting(pglob, sub);
-	}
-	glUniform1i(glslfSkin, 0);
-	glUniform1i(glslfPose, 0);
+	// Run exactly the set-up the draw would do (bones, poses, warp state, materials, lights, shadows), but only the bake.
+	if (g_caneGlErr)
+		while (glGetError() != GL_NO_ERROR) {}
+	DrawGlobImpl(prpl, true);
+	CaneCheckGlError("prebake", pglob, (int)prpl->ro.trlk, -1);
 }
 
 static void PreBakeAll()
@@ -1130,6 +1142,8 @@ void DrawSw(SW* psw, CM* pcm)
 	BindSwShadowTextures(psw);
 
 	s_bakesDone = false;
+	s_preBaked.clear();
+	s_bakeInline.clear();
 	if (g_fVertexUboFallback && g_fBakePrepass && !g_caneNoPrebake)
 	{
 		PreBakeAll();
@@ -1780,8 +1794,13 @@ static void BakeGlobSubLighting(GLOB* pglob, const SUBGLOB& sub)
 
 void DrawGlob(RPL* prpl)
 {
+	DrawGlobImpl(prpl, false);
+}
+
+static void DrawGlobImpl(RPL* prpl, bool fBakeOnly)
+{
 	GLOB* pglob = prpl->pglob;
-	const bool fDebugWireframe = g_fDebugObjectInspector &&
+	const bool fDebugWireframe = !fBakeOnly && g_fDebugObjectInspector &&
 		g_paloDebugSelected != nullptr && prpl->palo == g_paloDebugSelected;
 	const bool fQueuedCacheWrite = prpl->fQueuedCacheWrite;
 	BindFrameStreamRange(&ropStream, prpl->streamOffset, sizeof(ROGL));
@@ -1790,7 +1809,7 @@ void DrawGlob(RPL* prpl)
 	const GLuint poseWeightSSBO = GetGlobsetPoseWeightBuffer(pglobset);
 
 	const bool fHasBones = pglobset != nullptr && pglobset->cbnd > 0 && pglobset->boneMatrixSSBO != 0;
-	const bool fHasPoses = pglobset != nullptr && pglob->poseCount > 0 &&
+	const bool fHasPoses = !(g_caneBisect & 2) && pglobset != nullptr && pglob->poseCount > 0 &&
 		pglob->poseDposSSBO != 0 && pglob->poseDnormalSSBO != 0 &&
 		poseWeightSSBO != 0 &&
 		pglobset->agPoses.size() >= static_cast<size_t>(pglob->poseCount);
@@ -1861,7 +1880,7 @@ void DrawGlob(RPL* prpl)
 
 		SHD* pshd = sub.pshd;
 
-		if (prpl->rp == RP_Translucent && pshd != nullptr)
+		if (!fBakeOnly && prpl->rp == RP_Translucent && pshd != nullptr)
 		{
 			// FillShaders emits the GS ALPHA state with each material packet.
 			// grfshd 2/6 use ordinary source-alpha blending; the remaining
@@ -1966,9 +1985,26 @@ void DrawGlob(RPL* prpl)
 
 		glUniform1f(glslUnSelfIllum, sub.unSelfIllum);
 		// With the pre-pass on, relight draws were already baked before the first scene draw.
-		if (g_fVertexUboFallback && prpl->ro.trlk == TRLK_Relight && !s_bakesDone)
+		if (fBakeOnly)
+		{
 			BakeGlobSubLighting(pglob, sub);
+			continue;
+		}
+		if (g_fVertexUboFallback && prpl->ro.trlk == TRLK_Relight && FNeedsInlineBake(pglob))
+			BakeGlobSubLighting(pglob, sub);
+		if (g_caneGlErr)
+			while (glGetError() != GL_NO_ERROR) {}
 		pglob->PFNDRAW(sub.baseVertex, sub.firstIndex, sub.indexCount);
+		CaneCheckGlError("draw", pglob, (int)prpl->ro.trlk, i);
+	}
+
+	if (fBakeOnly)
+	{
+		// The scene draw (which comes later) finishes the cache bookkeeping; here only make the writes visible.
+		glUniform1i(glslfSkin, 0);
+		glUniform1i(glslfPose, 0);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		return;
 	}
 
 	if (fDebugWireframe)
@@ -2000,6 +2036,8 @@ void DrawGlob(RPL* prpl)
 
 void DrawCelBorder(RPLCEL* prplcel)
 {
+	if (g_caneBisect & 4)
+		return;
 	BindFrameStreamRange(&rcbStream, prplcel->streamOffset, sizeof(ROCEL));
 
 	GLOB* pglob = prplcel->pglob;

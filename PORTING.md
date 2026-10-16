@@ -263,3 +263,21 @@ device, Android/API, SoC, GLES version, RAM/storage, whether game data is presen
 signal, ANR on Android 11+), followed by the app's logcat. Options > Backup / Restore Saves > **Save debug log to a file**
 zips the header, the settings file and the logs (no saves, no game data) through the system file picker so it can be attached
 to an issue. Code: `DebugLog.java`, `SavesActivity.java`.
+
+## Adreno lighting bake: pre-pass details and developer switches (0.4.1-android.2)
+- The pre-pass (`PreBakeAll`) runs `DrawGlob`'s own set-up in a bake-only mode (`DrawGlobImpl(prpl, true)`), so the bake sees the same
+  bones, poses, warp state, materials, lights and shadows as the inline bake did. Blend state and the cache bookkeeping are left to the
+  real draw.
+- A glob that has never been baked (`bakeAttribsSet == false`) is **not** pre-baked: its first bake runs inline right before its draw.
+  Baking first-time globs in the pre-pass produced a multi-frame flicker the first time objects came into view (seen in the Hideout
+  when turning toward the level map); inline first bakes cost at most a rare single wrong frame the moment an object first appears.
+  A glob that appears in two packets in one frame is baked inline too.
+- Title-screen glitch counts used to choose this (detector `debug.cane.capture -1`-style, 25 s, Thor): pre-pass off 3, first bakes inline 1,
+  first bakes in the pre-pass 0 (but with the Hideout flicker). The two spikes near the start of the intro are scripted camera cuts and show
+  up in every configuration.
+- Switches readable on every build (set with `adb shell setprop`, read once at start-up):
+  `debug.cane.noprebake 1` (bake inside the scene passes), `debug.cane.glerr 1` (log GL errors after the pre-pass and glob draws to the
+  session log), `debug.cane.bisect <mask>` (1 no pose-weight upload, 2 no poses, 4 no cel borders, 8 first bakes go through the pre-pass again).
+- A native crash writes `Logs/crash-<pid>.txt` (signal, fault address, backtrace as `libmain.so+offset`); keep the unstripped
+  `libmain.so` of every release to decode it with `addr2line`.
+

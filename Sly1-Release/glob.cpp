@@ -849,8 +849,12 @@ void PostGlobsetLoad(GLOBSET* pglobset, ALO* palo)
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
+extern int g_caneBisect;
+
 void UploadGlobsetPoseWeights(GLOBSET* pglobset)
 {
+    if (g_caneBisect & 1)
+        return;
     if (pglobset == nullptr || pglobset->agPoses.empty())
         return;
 
