@@ -986,9 +986,10 @@ static void PreBakeGlob(RPL* prpl)
 	if (pglob == nullptr || pglob->ssboCachedMaterial == 0 || pglob->fThreeWay != 1 || prpl->ro.trlk != TRLK_Relight)
 		return;
 
-	if (!pglob->bakeAttribsSet && !(g_caneBisect & 8))
+	if (!pglob->bakeAttribsSet && (g_caneBisect & 16))
 	{
-		// Never baked before: its first bake happens right before its own draw (the way it always worked), not here.
+		// Experiment (debug.cane.bisect 16): never baked before, so its first bake happens right before its own draw, not here.
+		// Off by default: inline first bakes bring back the Adreno wrong-frame glitch in big levels.
 		s_bakeInline.insert(pglob);
 		return;
 	}

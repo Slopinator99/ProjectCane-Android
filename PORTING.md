@@ -268,16 +268,16 @@ to an issue. Code: `DebugLog.java`, `SavesActivity.java`.
 - The pre-pass (`PreBakeAll`) runs `DrawGlob`'s own set-up in a bake-only mode (`DrawGlobImpl(prpl, true)`), so the bake sees the same
   bones, poses, warp state, materials, lights and shadows as the inline bake did. Blend state and the cache bookkeeping are left to the
   real draw.
-- A glob that has never been baked (`bakeAttribsSet == false`) is **not** pre-baked: its first bake runs inline right before its draw.
-  Baking first-time globs in the pre-pass produced a multi-frame flicker the first time objects came into view (seen in the Hideout
-  when turning toward the level map); inline first bakes cost at most a rare single wrong frame the moment an object first appears.
-  A glob that appears in two packets in one frame is baked inline too.
+- First-time globs ARE pre-baked (default). Making their first bake inline (`debug.cane.bisect 16`) removes a multi-frame flicker seen the first
+  time objects come into view in the Hideout, but it brings the original Adreno wrong-frame glitch back in big levels (Paris) because many globs
+  bake for the first time there. The Hideout flicker is therefore still open (see the 2026-10-16 notes in the repo history).
+  A glob that appears in two packets in one frame is baked inline.
 - Title-screen glitch counts used to choose this (detector `debug.cane.capture -1`-style, 25 s, Thor): pre-pass off 3, first bakes inline 1,
   first bakes in the pre-pass 0 (but with the Hideout flicker). The two spikes near the start of the intro are scripted camera cuts and show
   up in every configuration.
 - Switches readable on every build (set with `adb shell setprop`, read once at start-up):
   `debug.cane.noprebake 1` (bake inside the scene passes), `debug.cane.glerr 1` (log GL errors after the pre-pass and glob draws to the
-  session log), `debug.cane.bisect <mask>` (1 no pose-weight upload, 2 no poses, 4 no cel borders, 8 first bakes go through the pre-pass again).
+  session log), `debug.cane.bisect <mask>` (1 no pose-weight upload, 2 no poses, 4 no cel borders, 16 first bakes inline instead of in the pre-pass; 8 is unused).
 - A native crash writes `Logs/crash-<pid>.txt` (signal, fault address, backtrace as `libmain.so+offset`); keep the unstripped
   `libmain.so` of every release to decode it with `addr2line`.
 
