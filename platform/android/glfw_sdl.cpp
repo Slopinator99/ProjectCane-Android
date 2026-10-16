@@ -214,6 +214,15 @@ int glfwInit(void)
 		char tr[PROP_VALUE_MAX] = {0};
 		__system_property_get("debug.cane.trace", tr);
 		g_caneTrace = tr[0] ? atoi(tr) : 0;
+		// audio backend for experiments: adb shell setprop debug.cane.audiodriver aaudio (or openslES); empty = SDL's default
+		char ad[PROP_VALUE_MAX] = {0};
+		__system_property_get("debug.cane.audiodriver", ad);
+		// anything but empty/"auto" forces that SDL driver (measured on the Thor: default OpenSL ES ~115 ms output latency, AAudio ~188 ms)
+		if (ad[0] && strcmp(ad, "auto") != 0)
+		{
+			SDL_SetHint(SDL_HINT_AUDIODRIVER, ad);
+			__android_log_print(ANDROID_LOG_INFO, "cane", "[Audio] driver hint: %s", ad);
+		}
 	}
 	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");   // see OpenPad()
@@ -423,6 +432,12 @@ const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int* c)
 	LoadVideoModes();
 	if (c) *c = static_cast<int>(g_videoModes.size());
 	return g_videoModes.data();
+}
+
+// Display cutout reported by CaneActivity (pixels): the on-screen controller keeps clear of it.
+extern "C" JNIEXPORT void JNICALL Java_org_projectcane_cane_CaneActivity_nativeSafeInsets(JNIEnv*, jclass, jint l, jint t, jint r, jint b)
+{
+	cane::touch::SetSafeInsets(static_cast<float>(l), static_cast<float>(t), static_cast<float>(r), static_cast<float>(b));
 }
 
 // ---- second screen -----------------------------------------------------------------------------------------------

@@ -85,6 +85,7 @@ struct Layout
 };
 
 float g_w = 1920.0f, g_h = 1080.0f;
+float g_insetL = 0, g_insetT = 0, g_insetR = 0, g_insetB = 0;   // display cutout, in pixels
 Layout g_layout;
 
 Rect Placed(float x, float y, float w, float h, const Place& p, float u)
@@ -109,30 +110,30 @@ void BuildLayout()
 
 	l.lsR = 150.0f * u * g_place[G_LS].s;
 	l.rsR = 150.0f * u * g_place[G_RS].s;
-	std::tie(l.lsX, l.lsY) = at(G_LS, cx - 420.0f * u, g_h - 215.0f * u);
-	std::tie(l.rsX, l.rsY) = at(G_RS, cx + 420.0f * u, g_h - 215.0f * u);
+	std::tie(l.lsX, l.lsY) = at(G_LS, cx - 420.0f * u, g_h - 215.0f * u - g_insetB);
+	std::tie(l.rsX, l.rsY) = at(G_RS, cx + 420.0f * u, g_h - 215.0f * u - g_insetB);
 
-	std::tie(l.faceX, l.faceY) = at(G_FACE, g_w - 272.0f * u, g_h * 0.55f);
+	std::tie(l.faceX, l.faceY) = at(G_FACE, g_w - 272.0f * u - g_insetR, g_h * 0.55f);
 	l.faceOffset = 108.0f * u * g_place[G_FACE].s;
 	l.faceR = 62.0f * u * g_place[G_FACE].s;
 
-	std::tie(l.dpadX, l.dpadY) = at(G_DPAD, 190.0f * u, g_h * 0.546f);
+	std::tie(l.dpadX, l.dpadY) = at(G_DPAD, 190.0f * u + g_insetL, g_h * 0.546f);
 	l.dpadR = 165.0f * u * g_place[G_DPAD].s;
 	l.dpadDead = 34.0f * u * g_place[G_DPAD].s;
 
-	std::tie(l.l3X, l.l3Y) = at(G_L3, cx - 615.0f * u, g_h - 77.0f * u);
-	std::tie(l.r3X, l.r3Y) = at(G_R3, cx + 615.0f * u, g_h - 77.0f * u);
+	std::tie(l.l3X, l.l3Y) = at(G_L3, cx - 615.0f * u, g_h - 77.0f * u - g_insetB);
+	std::tie(l.r3X, l.r3Y) = at(G_R3, cx + 615.0f * u, g_h - 77.0f * u - g_insetB);
 	l.l3R = 42.0f * u * g_place[G_L3].s;
 	l.r3R = 42.0f * u * g_place[G_R3].s;
 
-	l.l2 = Placed(100.0f * u, 63.0f * u, 107.0f * u, 90.0f * u, g_place[G_L2], u);
-	l.l1 = Placed(98.0f * u, 222.0f * u, 112.0f * u, 56.0f * u, g_place[G_L1], u);
-	l.r2 = Placed(g_w - 207.0f * u, 63.0f * u, 107.0f * u, 90.0f * u, g_place[G_R2], u);
-	l.r1 = Placed(g_w - 210.0f * u, 222.0f * u, 112.0f * u, 56.0f * u, g_place[G_R1], u);
+	l.l2 = Placed(100.0f * u + g_insetL, 63.0f * u + g_insetT, 107.0f * u, 90.0f * u, g_place[G_L2], u);
+	l.l1 = Placed(98.0f * u + g_insetL, 222.0f * u + g_insetT, 112.0f * u, 56.0f * u, g_place[G_L1], u);
+	l.r2 = Placed(g_w - 207.0f * u - g_insetR, 63.0f * u + g_insetT, 107.0f * u, 90.0f * u, g_place[G_R2], u);
+	l.r1 = Placed(g_w - 210.0f * u - g_insetR, 222.0f * u + g_insetT, 112.0f * u, 56.0f * u, g_place[G_R1], u);
 
 	const float bw = 100.0f * u, bh = 54.0f * u;
-	l.select = Placed(cx - 95.0f * u - bw * 0.5f, g_h - 88.0f * u - bh * 0.5f, bw, bh, g_place[G_SELECT], u);
-	l.start = Placed(cx + 95.0f * u - bw * 0.5f, g_h - 88.0f * u - bh * 0.5f, bw, bh, g_place[G_START], u);
+	l.select = Placed(cx - 95.0f * u - bw * 0.5f, g_h - 88.0f * u - bh * 0.5f - g_insetB, bw, bh, g_place[G_SELECT], u);
+	l.start = Placed(cx + 95.0f * u - bw * 0.5f, g_h - 88.0f * u - bh * 0.5f - g_insetB, bw, bh, g_place[G_START], u);
 }
 
 bool InRect(const Rect& r, float x, float y, float pad)
@@ -404,6 +405,11 @@ bool Active()
 	if (g_mode == Off) return false;
 	if (g_mode == On) return true;
 	return !g_physicalPad;
+}
+
+void SetSafeInsets(float left, float top, float right, float bottom)
+{
+	g_insetL = left; g_insetT = top; g_insetR = right; g_insetB = bottom;
 }
 
 void OnFinger(unsigned eventType, long long fingerId, float nx, float ny)

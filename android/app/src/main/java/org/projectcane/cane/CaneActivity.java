@@ -18,6 +18,44 @@ public class CaneActivity extends SDLActivity {
     protected void onCreate(Bundle savedInstanceState) {
         DebugLog.start(this);   // per-launch log file for bug reports (see SavesActivity > Save debug log)
         super.onCreate(savedInstanceState);
+        setupCutout();
+    }
+
+    // ---- display cutout (notch / camera hole) ------------------------------------------------------------------------
+
+    private static native void nativeSafeInsets(int left, int top, int right, int bottom);
+
+    /**
+     * Use the whole screen, including the strips beside a notch or camera hole (the game's picture is letterboxed to its aspect
+     * ratio anyway), and tell the game how far the cutout reaches in so the touch controls stay clear of it.
+     */
+    private void setupCutout() {
+        if (android.os.Build.VERSION.SDK_INT < 28) return;
+        try {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+            final android.view.View decor = getWindow().getDecorView();
+            decor.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.view.DisplayCutout cutout = insets.getDisplayCutout();
+                int l = 0, t = 0, r = 0, b = 0;
+                if (cutout != null) {
+                    l = cutout.getSafeInsetLeft();
+                    t = cutout.getSafeInsetTop();
+                    r = cutout.getSafeInsetRight();
+                    b = cutout.getSafeInsetBottom();
+                }
+                try {
+                    nativeSafeInsets(l, t, r, b);
+                } catch (Throwable ignored) {
+                    // native library not ready yet: the next insets pass reports again
+                }
+                return v.onApplyWindowInsets(insets);
+            });
+            decor.requestApplyInsets();
+        } catch (Throwable t) {
+            android.util.Log.w("cane", "cutout: " + t);
+        }
     }
 
     // ---- second screen (dual-display handhelds such as the AYN Thor) -------------------------------------------------

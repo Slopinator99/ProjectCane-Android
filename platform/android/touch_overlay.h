@@ -10,6 +10,7 @@ namespace cane::touch
 {
 enum Mode { Auto = 0, On = 1, Off = 2 };
 
+void SetSafeInsets(float left, float top, float right, float bottom);   // display cutout (pixels): controls stay clear
 void Init();                                            // loads touch_settings.cfg
 void OnFinger(unsigned eventType, long long fingerId, float nx, float ny);   // SDL_FINGERDOWN/MOTION/UP
 void BeginFrame();                                      // once per poll: drops fingers that lifted and were already seen
