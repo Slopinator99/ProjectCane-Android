@@ -34,10 +34,23 @@ The game is fully playable on these. Anything in the same processor families (Sn
 Adreno, MediaTek / Mali) should normally work too. It has **not** been tested on Samsung
 Exynos processors.
 
-The minimum is Android 10, ARM64 and a GPU exposing OpenGL ES 3.2 with enough vertex-stage
-buffer bindings; the game shows a clear error at start-up if the GPU does not qualify.
-Prebuilt APKs are not published yet; build from source (see
-[Building](#building-the-android-app)).
+## Requirements
+
+| | Minimum |
+| --- | --- |
+| Android | 10 (API 29) or newer |
+| Processor | 64-bit ARM (arm64-v8a). 32-bit devices and x86 emulators are not supported |
+| GPU | OpenGL ES 3.2 with enough vertex-stage buffer bindings. The game shows a clear error at start-up if the GPU does not qualify |
+| Storage | About 2.5 GB for the imported game data, and about 4 GB free while importing. Your ISO (about 2.7 GB) has to be on the device or reachable through the file picker while you import; it can be deleted afterwards |
+| Game copy | Your own NTSC-U ISO of *Sly Cooper and the Thievius Raccoonus* (SCUS-97198) |
+| Controls | None required: a built-in or Bluetooth/USB controller works, otherwise the on-screen controller is used |
+| Screen | Landscape. 60 Hz works everywhere; 90 Hz or higher is offered if your screen supports it |
+
+Memory use has not been measured yet, so there is no established minimum for RAM. If a device
+runs out of memory, please attach the debug log to your issue (Options, Backup / Restore
+Saves, Save debug log). Download a prebuilt APK from the
+[Releases](https://github.com/Slopinator99/ProjectCane-Android/releases) page, or build from
+source (see [Building](#building-the-android-app)).
 
 ## Features
 
@@ -59,7 +72,7 @@ Prebuilt APKs are not published yet; build from source (see
 
 ## Installing
 
-1. Install the APK (`adb install ProjectCane-release-signed.apk`, or open it on the device).
+1. Download the APK from [Releases](https://github.com/Slopinator99/ProjectCane-Android/releases) and install it (open it on the device, or `adb install ProjectCane-Android-<version>.apk`). Updates install over the previous version and keep your saves and data.
 2. Copy your NTSC-U ISO to the device (for example into the Download folder).
 3. Open ProjectCane, choose **Select PS2 ISO and extract**, and pick the ISO. Wait for the
    import to finish; the game starts by itself.
