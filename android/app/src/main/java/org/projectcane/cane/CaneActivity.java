@@ -18,6 +18,24 @@ public class CaneActivity extends SDLActivity {
         runOnUiThread(() -> startActivity(new Intent(this, SavesActivity.class)));
     }
 
+    /** SDL calls finish() when the game exits; also remove the card from the Recents list so no stale "active app" is left. */
+    @Override
+    public void finish() {
+        finishAndRemoveTask();
+    }
+
+    /**
+     * "Exit Game" ends the native main loop and SDL finishes the activity, but the process (and the game's global state) would
+     * stay alive, and tapping the icon again started a second run on top of it. End the process with the activity.
+     */
+    @Override
+    protected void onDestroy() {
+        final boolean finishing = isFinishing();
+        super.onDestroy();
+        if (finishing)
+            android.os.Process.killProcess(android.os.Process.myPid());
+    }
+
     @Override
     protected String[] getLibraries() {
         return new String[] {

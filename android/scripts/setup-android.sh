@@ -8,6 +8,15 @@ if [ ! -d "$tp/SDL2" ]; then
   git clone --depth 1 --branch release-2.30.11 https://github.com/libsdl-org/SDL.git "$tp/SDL2"
 fi
 
+# Our fixes to the SDL sources (idempotent): the USB/Bluetooth controller driver must register its receivers with an export
+# flag on Android 13+, otherwise it fails to start on every launch.
+for p in "$root"/patches/*.patch; do
+  if git -C "$tp/SDL2" apply --check "$p" 2>/dev/null; then
+    git -C "$tp/SDL2" apply "$p"
+    echo "applied $(basename "$p")"
+  fi
+done
+
 cat <<MSG
 SDL2 is ready at $tp/SDL2.
 

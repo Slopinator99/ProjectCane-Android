@@ -1,0 +1,32 @@
+diff --git a/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java b/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java
+index 21a1c1d..092aceb 100644
+--- a/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java
++++ b/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java
+@@ -193,7 +193,12 @@ public class HIDDeviceManager {
+         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+         filter.addAction(HIDDeviceManager.ACTION_USB_PERMISSION);
+-        mContext.registerReceiver(mUsbBroadcast, filter);
++        // Android 13+ (and every target API 34 app) refuses a receiver registered without an export flag.
++        if (Build.VERSION.SDK_INT >= 33) {
++            mContext.registerReceiver(mUsbBroadcast, filter, Context.RECEIVER_EXPORTED);
++        } else {
++            mContext.registerReceiver(mUsbBroadcast, filter);
++        }
+ 
+         for (UsbDevice usbDevice : mUsbManager.getDeviceList().values()) {
+             handleUsbDeviceAttached(usbDevice);
+@@ -404,7 +409,12 @@ public class HIDDeviceManager {
+         IntentFilter filter = new IntentFilter();
+         filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+-        mContext.registerReceiver(mBluetoothBroadcast, filter);
++        // Android 13+ (and every target API 34 app) refuses a receiver registered without an export flag.
++        if (Build.VERSION.SDK_INT >= 33) {
++            mContext.registerReceiver(mBluetoothBroadcast, filter, Context.RECEIVER_EXPORTED);
++        } else {
++            mContext.registerReceiver(mBluetoothBroadcast, filter);
++        }
+ 
+         if (mIsChromebook) {
+             mHandler = new Handler(Looper.getMainLooper());
