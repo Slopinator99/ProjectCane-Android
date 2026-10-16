@@ -122,6 +122,24 @@ extern "C" void cane_resume_clear()
 
 static void WriteFile(const std::filesystem::path& path, const char* why, bool fState);
 
+#ifdef __ANDROID__
+extern "C" void cane_android_set_episode(int episode);
+#endif
+
+// Called every frame: the second screen shows the episode being played (-1 on the splash / title screen).
+extern "C" void cane_second_screen_tick()
+{
+#ifdef __ANDROID__
+    int episode = -1;
+    if (g_pgsCur != nullptr && g_psw != nullptr && g_ui.uisPlaying != UIS_Splash && g_ui.uisPlaying != UIS_Attract)
+        episode = static_cast<int>(g_pgsCur->gameWorldCur);
+    // the Hideout (hub of every episode) has its own picture: 6
+    if (episode >= 0 && g_transition.m_plevelCurrent != nullptr && g_transition.m_plevelCurrent == PlevelinfoFromSearchKey(9))
+        episode = 6;
+    cane_android_set_episode(episode);
+#endif
+}
+
 extern "C" void cane_resume_save(const char* why)
 {
     WriteFile(ResumePath(), why, false);

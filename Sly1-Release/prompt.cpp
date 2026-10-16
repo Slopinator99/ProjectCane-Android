@@ -30,6 +30,10 @@ extern "C" bool cane_state_exists();
 extern "C" bool cane_state_save();
 extern "C" bool cane_state_load();
 extern "C" void cane_android_toast(const char* text);
+extern "C" int cane_android_second_screen_state();
+extern "C" void cane_android_toggle_second_screen();
+extern "C" int cane_android_second_screen_art();
+extern "C" void cane_android_cycle_second_screen_art();
 #endif
 #ifdef __ANDROID__
 extern "C" int cane_android_has_hw_keyboard();
@@ -622,9 +626,13 @@ void SetPromptPrk(PROMPT* pprompt)
             else if (response == RESPK_SaveGame)
                 include = g_ui.uisPlaying != UIS_Attract;
 #ifndef __ANDROID__
-            else if (response == RESPK_BackupSaves)
+            else if (response == RESPK_BackupSaves || response == RESPK_SecondScreen || response == RESPK_SecondScreenArt)
                 include = false;
 #else
+            else if (response == RESPK_SecondScreen)
+                include = cane_android_second_screen_state() >= 0;
+            else if (response == RESPK_SecondScreenArt)
+                include = cane_android_second_screen_state() > 0;
             else if (response == RESPK_AutoIconify)
                 include = false;   // desktop window behaviour: Android decides what happens when the app loses focus
 #endif
@@ -800,6 +808,13 @@ void SetPromptPrk(PROMPT* pprompt)
         aspectRatioName = "16:9 (PS2)";
     std::snprintf(g_achzRespk35, sizeof(g_achzRespk35), "Aspect Ratio: %s", aspectRatioName);
 #ifdef __ANDROID__
+    std::snprintf(g_achzRespkSecondScreen, sizeof(g_achzRespkSecondScreen), "Second Screen: %s", cane_android_second_screen_state() > 0 ? "On" : "Off");
+    {
+        static const char* const kArt[10] = { "Follow the game", "Black", "Title screen", "Intro / Paris", "Tide of Terror",
+                                              "Sunset Snake Eyes", "Vicious Voodoo", "Fire in the Sky", "Cold Heart of Hate", "Hideout" };
+        const int art = cane_android_second_screen_art();
+        std::snprintf(g_achzRespkSecondScreenArt, sizeof(g_achzRespkSecondScreenArt), "Second Screen Picture: %s", kArt[art >= 0 && art < 10 ? art : 0]);
+    }
     cane_touch_label(0, g_achzRespkTouchMode, sizeof(g_achzRespkTouchMode));
     cane_touch_label(1, g_achzRespkTouchOpacity, sizeof(g_achzRespkTouchOpacity));
     cane_touch_label(2, g_achzRespkTouchSize, sizeof(g_achzRespkTouchSize));
@@ -1669,6 +1684,16 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
 #ifdef __ANDROID__
                 case RESPK_BackupSaves:
                 cane_android_open_saves_screen();
+                return;
+
+                case RESPK_SecondScreen:
+                cane_android_toggle_second_screen();
+                rebuildPromptKeepingSelection();
+                return;
+
+                case RESPK_SecondScreenArt:
+                cane_android_cycle_second_screen_art();
+                rebuildPromptKeepingSelection();
                 return;
 #endif
 				case RESPK_AutoIconify:

@@ -425,6 +425,48 @@ const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int* c)
 	return g_videoModes.data();
 }
 
+// ---- second screen -----------------------------------------------------------------------------------------------
+
+static int CallActivityInt(const char* name, const char* sig, int arg, bool hasArg)
+{
+	JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+	jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+	if (env == nullptr || activity == nullptr)
+		return -1;
+	jclass cls = env->GetObjectClass(activity);
+	jmethodID m = env->GetMethodID(cls, name, sig);
+	int result = -1;
+	if (m != nullptr)
+	{
+		if (sig[strlen(sig) - 1] == 'I')
+			result = hasArg ? env->CallIntMethod(activity, m, static_cast<jint>(arg)) : env->CallIntMethod(activity, m);
+		else if (hasArg)
+			env->CallVoidMethod(activity, m, static_cast<jint>(arg));
+		else
+			env->CallVoidMethod(activity, m);
+	}
+	env->DeleteLocalRef(cls);
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+	return result;
+}
+
+// Tells the second screen which episode is being played (-1 = title screen). Cheap: only crosses into Java on a change.
+extern "C" void cane_android_set_episode(int episode)
+{
+	static int s_last = -2;
+	if (episode == s_last)
+		return;
+	s_last = episode;
+	CallActivityInt("setEpisode", "(I)V", episode, true);
+}
+
+// -1 no second display, 0 off, 1 on
+extern "C" int cane_android_second_screen_state() { return CallActivityInt("secondScreenState", "()I", 0, false); }
+extern "C" void cane_android_toggle_second_screen() { CallActivityInt("toggleSecondScreen", "()V", 0, false); }
+extern "C" int cane_android_second_screen_art() { return CallActivityInt("secondScreenArt", "()I", 0, false); }
+extern "C" void cane_android_cycle_second_screen_art() { CallActivityInt("cycleSecondScreenArt", "()V", 0, false); }
+
 // Short on-screen message (pause menu Save State feedback).
 extern "C" void cane_android_toast(const char* text)
 {

@@ -108,8 +108,10 @@ enum RESPK : int
 	RESPK_TouchEdit,
 	RESPK_SaveState,     // Android: pause menu snapshot
 	RESPK_LoadState,
+	RESPK_SecondScreen,  // Android: second display on/off (Options menu)
+	RESPK_SecondScreenArt,
 
-	RESPK_Max = 86
+	RESPK_Max = 88
 };
 
 // -----------------------------------------------------------------------------
@@ -370,6 +372,8 @@ inline const RESPK s_arespkOptionsMenuAll[] =
     RESPK_Video,
     RESPK_Controls,
     RESPK_BackupSaves,   // hidden outside Android (see the options menu builder in prompt.cpp)
+    RESPK_SecondScreen,  // Android with a second display only
+    RESPK_SecondScreenArt,
 	RESPK_AutoIconify,
     RESPK_Back
 };
@@ -444,6 +448,8 @@ inline char g_achzRespk74[64]{};
 inline char g_achzRespk75[64]{};
 inline char g_achzRespk76[64]{};
 inline char g_achzRespk77[128]{};
+inline char g_achzRespkSecondScreen[64]{};
+inline char g_achzRespkSecondScreenArt[96]{};
 inline char g_achzRespkTouchMode[64]{};
 inline char g_achzRespkTouchOpacity[64]{};
 inline char g_achzRespkTouchSize[64]{};
@@ -601,7 +607,9 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	g_achzRespkTouchSize,     // 82 RESPK_TouchSize
 	"Edit Touch Layout...",   // 83 RESPK_TouchEdit
 	"Save State (experimental)", // 84 RESPK_SaveState
-	"Load State (experimental)"  // 85 RESPK_LoadState
+	"Load State (experimental)", // 85
+	g_achzRespkSecondScreen,     // 86 RESPK_SecondScreen
+	g_achzRespkSecondScreenArt   // 87 RESPK_SecondScreenArt RESPK_LoadState
 };
 
 // -----------------------------------------------------------------------------
@@ -674,7 +682,9 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr },           // 82 RESPK_TouchSize
 	{ 0, nullptr },           // 83 RESPK_TouchEdit
 	{ 0, nullptr },           // 84 RESPK_SaveState
-	{ 0, nullptr }            // 85 RESPK_LoadState
+	{ 0, nullptr },           // 85 RESPK_LoadState
+	{ 0, nullptr },           // 86 RESPK_SecondScreen
+	{ 0, nullptr }            // 87 RESPK_SecondScreenArt
 };
 
 // -----------------------------------------------------------------------------

@@ -114,9 +114,19 @@ layout changes, the data/extraction format, new window or input calls).
   One state slot per save slot, stored in `Saves/state.dat`. **Experimental:** so far it has only been tested in ordinary Sly-on-foot
   levels. Vehicles, turrets and other special levels are untested and may not restore correctly. It does not replace the game's own saving.
 
+## Second screen (dual-display handhelds)
+
+On devices with a second display (for example the AYN Thor) the game stays on the main screen and the other screen shows a picture for
+where you are: the title screen, the Paris intro, the Hideout or the current episode. The pictures are made on the device, once, from the
+title cards in your own cutscene files; nothing is bundled with the app. Options has **Second Screen** (on/off, on by default when a second
+display exists) and **Second Screen Picture** (follow the game, black, or one fixed picture). To use your own artwork, put files named
+`title.png`, `0.png` (Paris), `1.png` to `5.png` (the episodes) or `6.png` (Hideout) in `Android/data/org.projectcane.cane/files/SecondScreen/`;
+they take priority over the generated ones. The second screen never takes input focus, so controllers keep working.
+
 ## Roadmap
 
 Ideas, in no particular order (nothing here is promised):
+- **Second screen extras:** touch buttons (Save State, Load State, map) on the second display.
 - **Save State polish:** testing in special levels (vehicles, turrets), several state slots, restoring the camera exactly.
 - **Dual-screen mode** for handhelds with two displays (for example the AYN Thor): game on one screen, controls or extras on the other.
 - **iOS port** (exploratory, not started): see `PORTING.md` for what it would take.

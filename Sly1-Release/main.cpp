@@ -16,6 +16,7 @@
 #include "../platform/platform.h"
 #ifdef __ANDROID__
 extern "C" void cane_touch_draw();
+extern "C" void cane_second_screen_tick();
 extern "C" void cane_android_request_refresh_rate(int hz);
 #endif
 #if defined(__ANDROID__) && defined(CANE_DIAG)
@@ -323,6 +324,7 @@ void RunGameFrame()
     RenderMenuGui(g_psw);
 #ifdef __ANDROID__
     cane_touch_draw();   // on-screen controller (no-op unless active)
+    cane_second_screen_tick();   // episode picture on the second display
 #endif
 
     if (g_psw != nullptr)

@@ -42,6 +42,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Picture of the current episode on the second display of dual-screen handhelds (see SecondScreenActivity). -->
+        <activity
+            android:name=".SecondScreenActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:configChanges="keyboardHidden|keyboard|orientation|screenSize|screenLayout|uiMode|smallestScreenSize|density|navigation"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+
         <!-- Save backup / restore, opened from the in-game Options menu. -->
         <activity
             android:name=".SavesActivity"
