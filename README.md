@@ -104,6 +104,14 @@ This repository tracks `theclub654/ProjectCane`. Upstream changes are merged int
 and re-tested on device; `PORTING.md` lists what usually needs attention (shader and buffer
 layout changes, the data/extraction format, new window or input calls).
 
+## Roadmap
+
+Ideas, in no particular order (nothing here is promised):
+- **Higher refresh rates:** offer 120/144 Hz in the Frame Rate option and ask Android to run at that rate.
+- **Auto-save and faster resume** when leaving the app (a true emulator-style save state is a research item).
+- **Dual-screen mode** for handhelds with two displays (for example the AYN Thor): game on one screen, controls or extras on the other.
+- **iOS port** (exploratory, not started): see `PORTING.md` for what it would take.
+
 ## Troubleshooting
 
 - **"Game data not found" after an update:** data from an older version needs re-importing once.

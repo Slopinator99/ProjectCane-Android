@@ -285,3 +285,14 @@ to an issue. Code: `DebugLog.java`, `SavesActivity.java`.
 - A native crash writes `Logs/crash-<pid>.txt` (signal, fault address, backtrace as `libmain.so+offset`); keep the unstripped
   `libmain.so` of every release to decode it with `addr2line`.
 
+## Roadmap: iOS port (idea, not started)
+What carries over: the game code, SDL2 (it supports iOS), FAudio, an FFmpeg cross-build, the C++ BRX rebuilder and the on-screen controller
+(`platform/android/touch_overlay.*`, plain C++ over SDL touch events).
+What does not:
+- **Graphics.** iOS stops at OpenGL ES 3.0 and Apple deprecated it; the renderer here needs ES 3.2 features (shader storage buffers, transform
+  feedback bakes, base-vertex draws). Realistic routes: ANGLE (OpenGL ES on top of Metal), or a Metal / MoltenVK backend. The Adreno/Mali fallback
+  work in this repo (data textures instead of vertex-stage buffers) is a head start, because Metal-class GPUs have the same kind of limits.
+- **Data import.** The on-device ISO extractor and level rebuild driver are Java (`android/.../extract`); the iOS app needs them in C++ or Swift
+  (the BRX rebuilder itself is already portable C++).
+- **Platform shell.** A new Xcode project, file-picker import of the ISO, save backup/restore, haptics and lifecycle handling.
+- **Distribution.** Needs an Apple developer account or sideloading (no App Store route for this kind of project).
