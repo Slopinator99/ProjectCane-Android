@@ -1,4 +1,5 @@
 // GLFW-on-SDL2 shim for Android. See GLFW/glfw3.h.
+#include <vector>
 #include <GLFW/glfw3.h>
 #include <SDL.h>
 #include <jni.h>
@@ -376,7 +377,61 @@ GLFWmonitor** glfwGetMonitors(int* c) { if (c) *c = 1; return g_monList; }
 void glfwGetMonitorPos(GLFWmonitor*, int* x, int* y) { if (x) *x = 0; if (y) *y = 0; }
 void glfwGetMonitorWorkarea(GLFWmonitor*, int* x, int* y, int* w, int* h) { if (x) *x = 0; if (y) *y = 0; if (w) *w = g_mode.width; if (h) *h = g_mode.height; }
 const GLFWvidmode* glfwGetVideoMode(GLFWmonitor*) { return &g_mode; }
-const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int* c) { if (c) *c = 1; return &g_mode; }
+// The refresh rates the screen really supports (asked from the activity once), so the Frame Rate option can offer 90/120/144 Hz.
+static std::vector<GLFWvidmode> g_videoModes;
+static void LoadVideoModes()
+{
+	if (!g_videoModes.empty())
+		return;
+	JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+	jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+	if (env != nullptr && activity != nullptr)
+	{
+		jclass cls = env->GetObjectClass(activity);
+		jmethodID m = env->GetMethodID(cls, "supportedRefreshRates", "()[I");
+		jintArray rates = m != nullptr ? static_cast<jintArray>(env->CallObjectMethod(activity, m)) : nullptr;
+		if (rates != nullptr)
+		{
+			const jsize n = env->GetArrayLength(rates);
+			jint* values = env->GetIntArrayElements(rates, nullptr);
+			for (jsize i = 0; i < n; ++i)
+			{
+				GLFWvidmode mode = g_mode;
+				mode.refreshRate = values[i];
+				g_videoModes.push_back(mode);
+			}
+			env->ReleaseIntArrayElements(rates, values, JNI_ABORT);
+			env->DeleteLocalRef(rates);
+		}
+		env->DeleteLocalRef(cls);
+		if (env->ExceptionCheck())
+			env->ExceptionClear();
+	}
+	if (g_videoModes.empty())
+		g_videoModes.push_back(g_mode);
+}
+const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int* c)
+{
+	LoadVideoModes();
+	if (c) *c = static_cast<int>(g_videoModes.size());
+	return g_videoModes.data();
+}
+
+// Asks Android to run the screen at (at least) hz; called whenever the game's frame-rate target changes.
+extern "C" void cane_android_request_refresh_rate(int hz)
+{
+	JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+	jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+	if (env == nullptr || activity == nullptr)
+		return;
+	jclass cls = env->GetObjectClass(activity);
+	jmethodID m = env->GetMethodID(cls, "requestRefreshRate", "(I)V");
+	if (m != nullptr)
+		env->CallVoidMethod(activity, m, static_cast<jint>(hz));
+	env->DeleteLocalRef(cls);
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+}
 
 GLFWframebuffersizefun glfwSetFramebufferSizeCallback(GLFWwindow* w, GLFWframebuffersizefun cb) { auto* x = (Win*)w; auto o = x->fbCb; x->fbCb = cb; return o; }
 GLFWcursorposfun   glfwSetCursorPosCallback(GLFWwindow* w, GLFWcursorposfun cb)     { auto* x = (Win*)w; auto o = x->curCb; x->curCb = cb; return o; }

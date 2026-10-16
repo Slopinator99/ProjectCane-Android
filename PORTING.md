@@ -296,3 +296,9 @@ What does not:
   (the BRX rebuilder itself is already portable C++).
 - **Platform shell.** A new Xcode project, file-picker import of the ISO, save backup/restore, haptics and lifecycle handling.
 - **Distribution.** Needs an Apple developer account or sideloading (no App Store route for this kind of project).
+
+## High refresh rates (0.4.1-android.2+)
+`glfwGetVideoModes` (platform/android/glfw_sdl.cpp) asks `CaneActivity.supportedRefreshRates()` for the rates the screen supports at its current
+resolution, so the Frame Rate option (`SupportedFrameRates` in prompt.cpp) lists them. When the game's frame-rate target changes, `FramePacer::Wait`
+calls `cane_android_request_refresh_rate`, which makes `CaneActivity.requestRefreshRate()` set `preferredDisplayModeId` to the lowest supported mode
+at or above the target (Android otherwise tends to keep apps at 60 Hz). Verified on the AYN Thor (60/120 Hz panel): the FPS overlay reports 120.

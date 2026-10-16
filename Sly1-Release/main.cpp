@@ -16,6 +16,7 @@
 #include "../platform/platform.h"
 #ifdef __ANDROID__
 extern "C" void cane_touch_draw();
+extern "C" void cane_android_request_refresh_rate(int hz);
 #endif
 #if defined(__ANDROID__) && defined(CANE_DIAG)
 extern int g_caneSkip;
@@ -99,6 +100,9 @@ public:
         {
             m_frameRate = g_targetFrameRate;
             m_deadline = Clock::now();
+#ifdef __ANDROID__
+            cane_android_request_refresh_rate(m_frameRate);   // let the screen run at a matching refresh rate
+#endif
         }
 
         const auto frameDuration = std::chrono::duration_cast<Clock::duration>(

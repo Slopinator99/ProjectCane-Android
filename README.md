@@ -51,6 +51,7 @@ Prebuilt APKs are not published yet; build from source (see
 - **On-screen controller** in a PlayStation-style layout with an editor for moving and
   resizing every control, plus opacity and size settings. It hides itself when a physical
   pad is used.
+- **High refresh rates:** the Frame Rate option offers every refresh rate the screen supports (for example 120 Hz) and asks Android to run the screen at it; 60 stays the default.
 - **Back button = Start** (opens and closes the pause menu).
 - **Save backup and restore** from the Options menu: saves are exported as a ZIP to any
   location you pick in the system file picker, and restored from one the same way.
@@ -107,7 +108,6 @@ layout changes, the data/extraction format, new window or input calls).
 ## Roadmap
 
 Ideas, in no particular order (nothing here is promised):
-- **Higher refresh rates:** offer 120/144 Hz in the Frame Rate option and ask Android to run at that rate.
 - **Auto-save and faster resume** when leaving the app (a true emulator-style save state is a research item).
 - **Dual-screen mode** for handhelds with two displays (for example the AYN Thor): game on one screen, controls or extras on the other.
 - **iOS port** (exploratory, not started): see `PORTING.md` for what it would take.
