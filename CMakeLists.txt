@@ -111,7 +111,7 @@ set(cane_ui_sources
     "${imgui_root}/ImGuiFileDialog.cpp"
     Sly1-Release/glad.c)
 if(CANE_GLES)
-    list(APPEND cane_ui_sources platform/android/glfw_sdl.cpp platform/android/touch_overlay.cpp)
+    list(APPEND cane_ui_sources platform/android/glfw_sdl.cpp platform/android/touch_overlay.cpp platform/android/crash_handler.cpp)
 else()
     list(APPEND cane_ui_sources "${imgui_root}/imgui_impl_glfw.cpp")
 endif()

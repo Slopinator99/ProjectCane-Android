@@ -61,11 +61,14 @@ final class DebugLog {
     }
 
     private static void prune(File dir) {
-        File[] old = dir.listFiles((d, n) -> n.startsWith("session-") && n.endsWith(".log"));
-        if (old == null || old.length < KEEP) return;
-        Arrays.sort(old, Comparator.comparing(File::getName));
-        for (int i = 0; i <= old.length - KEEP; i++) //noinspection ResultOfMethodCallIgnored
-            old[i].delete();
+        for (String prefix : new String[] {"session-", "crash-"}) {
+            final String p = prefix;
+            File[] old = dir.listFiles((d, n) -> n.startsWith(p) && (n.endsWith(".log") || n.endsWith(".txt")));
+            if (old == null || old.length < KEEP) continue;
+            Arrays.sort(old, Comparator.comparing(File::lastModified));
+            for (int i = 0; i <= old.length - KEEP; i++) //noinspection ResultOfMethodCallIgnored
+                old[i].delete();
+        }
     }
 
     private static void capture(File file, String header) {

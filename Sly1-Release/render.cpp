@@ -956,7 +956,8 @@ static void PreBakeGlob(RPL* prpl)
 
 	GLOBSET* pglobset = prpl->palo != nullptr ? &prpl->palo->globset : nullptr;
 	const bool fHasBones = pglobset != nullptr && pglobset->cbnd > 0 && pglobset->boneMatrixSSBO != 0;
-	const bool fHasPoses = pglobset != nullptr && pglob->poseCount > 0 && pglob->poseDposSSBO != 0 && pglob->poseDnormalSSBO != 0 && !pglobset->agPoses.empty();
+	const bool fHasPoses = pglobset != nullptr && pglob->poseCount > 0 && pglob->poseDposSSBO != 0 && pglob->poseDnormalSSBO != 0 &&
+		pglobset->agPoses.size() >= static_cast<size_t>(pglob->poseCount);
 
 	glUniform1i(glslfPose, fHasPoses ? 1 : 0);
 	if (fHasBones)
@@ -966,7 +967,7 @@ static void PreBakeGlob(RPL* prpl)
 		BindShaderStorageBuffer(10, pglob->poseDposSSBO);
 		BindShaderStorageBuffer(11, pglob->poseDnormalSSBO);
 		glUniform1i(glslPoseCount, pglob->poseCount);
-		glUniform1fv(glslPoseWeights, pglob->poseCount, pglobset->agPoses.data());
+		glUniform1fv(glslPoseWeights, (std::min)(pglob->poseCount, 64), pglobset->agPoses.data());
 	}
 
 	BindVertexArray(pglob->VAO);
@@ -1806,7 +1807,7 @@ void DrawGlob(RPL* prpl)
 		BindShaderStorageBuffer(14, poseWeightSSBO);   // no-op in the vertex-SSBO fallback
 		glUniform1i(glslPoseCount, pglob->poseCount);
 		if (g_fVertexUboFallback)
-			glUniform1fv(glslPoseWeights, pglob->poseCount, pglobset->agPoses.data());
+			glUniform1fv(glslPoseWeights, (std::min)(pglob->poseCount, 64), pglobset->agPoses.data());
 	}
 
 	if (pglob->fThreeWay == 1)
@@ -2028,7 +2029,7 @@ void DrawCelBorder(RPLCEL* prplcel)
 		BindShaderStorageBuffer(14, poseWeightSSBO);   // no-op in the vertex-SSBO fallback
 		glUniform1i(glslCelPoseCount, pglob->poseCount);
 		if (g_fVertexUboFallback)
-			glUniform1fv(glslCelPoseWeights, pglob->poseCount, pglobset->agPoses.data());
+			glUniform1fv(glslCelPoseWeights, (std::min)(pglob->poseCount, 64), pglobset->agPoses.data());
 	}
 
 	glUniform1i(glslCelSkin, fSkin ? 1 : 0);

@@ -175,8 +175,17 @@ Pad* PadFor(int jid) { return (jid >= 0 && jid < kMaxPads && g_pads[jid].js) ? &
 
 extern "C" {
 
+extern "C" void cane_install_crash_handler(const char* logsDir);
+
 int glfwInit(void)
 {
+	{
+		// native crash backtraces go to <files>/Logs/crash-<pid>.txt (picked up by the debug-log export)
+		const char* base = SDL_AndroidGetExternalStoragePath();
+		static char logs[512];
+		if (base != nullptr) snprintf(logs, sizeof(logs), "%s/Logs", base); else logs[0] = 0;
+		cane_install_crash_handler(logs);
+	}
 	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");   // see OpenPad()
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");          // touches drive the on-screen controller, not a fake mouse

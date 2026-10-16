@@ -183,7 +183,7 @@ public class SavesActivity extends Activity {
                         zip.closeEntry();
                         count++;
                     }
-                    File[] logs = DebugLog.logsDir(this).listFiles((d, n) -> n.startsWith("session-") && n.endsWith(".log"));
+                    File[] logs = DebugLog.logsDir(this).listFiles((d, n) -> (n.startsWith("session-") && n.endsWith(".log")) || (n.startsWith("crash-") && n.endsWith(".txt")));
                     if (logs != null) {
                         java.util.Arrays.sort(logs);
                         for (File f : logs) {
