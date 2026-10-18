@@ -1563,6 +1563,7 @@ void DeleteWorld(SW *psw)
 	FreeBinocGL(&g_binoc);
 
 	rgbaSky = glm::vec4(0.0);
+	ResetBakeAttribCache();   // GL names are reused by the next world: forget which buffer each VAO pointed at
 	std::cout << "World Deleted\n";
 }
 

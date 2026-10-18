@@ -4583,6 +4583,7 @@ void DeleteModel(ALO* palo)
 	DeleteGpuResource(palo->globset.boneMatrixSSBO);
 	DeleteGlobsetPoseWeightBuffer(&palo->globset);
 
+	ResetBakeAttribCache();   // GL names are reused: forget which buffer each VAO pointed at
 	for (GLOB& glob : palo->globset.aglob)
 	{
 		DeleteVertexArray(glob.VAO);

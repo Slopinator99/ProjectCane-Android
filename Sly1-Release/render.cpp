@@ -954,6 +954,9 @@ static bool s_bakesDone = false;
 int g_caneBisect = 0;   // debug.cane.bisect bitmask (developer A/B switches, see PORTING.md)
 int g_caneGlErr = 0;   // debug.cane.glerr 1: log OpenGL errors right after the bake pre-pass and after glob draws
 static int s_glErrLogged = 0;
+// What the last glob draw looked like, for the crash report (platform/android/crash_handler.cpp prints it). Plain integers only.
+extern "C" { unsigned long long g_caneLastDraw[16] = {}; }
+static int s_badDrawLogged = 0;
 static void CaneCheckGlError(const char* where, const GLOB* pglob, int trlk, int sub)
 {
 	if (!g_caneGlErr)
@@ -1762,9 +1765,18 @@ void BindGlobThreeWayTextures(GLuint ambientTexture, GLuint diffuseTexture, GLui
 // same program and per-draw state as the draw that follows.
 // Instanced globs and globset clones share one VAO but each owns its cache buffer, so attributes 6..8
 // must follow whichever glob is drawing: remember which buffer each VAO currently points at.
+// Which cache buffer each VAO's attributes 6..8 currently read. GL object names are reused after a delete (a reloaded level gets the
+// same VAO and buffer numbers again), so this table must be dropped whenever globs are deleted: a stale "already set up" answer skipped
+// the attribute setup of the new VAO, and the bake then enabled attributes 6..8 with no buffer behind them. The Adreno driver then
+// copied vertex data from a null pointer inside the draw (SIGSEGV on the first frame after Load State / a reload).
+static std::unordered_map<GLuint, GLuint> s_vaoCache;
+void ResetBakeAttribCache()
+{
+	s_vaoCache.clear();
+}
+
 static void EnsureBakeAttribs(GLOB* pglob)
 {
-	static std::unordered_map<GLuint, GLuint> s_vaoCache;
 	GLuint& bound = s_vaoCache[pglob->VAO];
 #if defined(__ANDROID__) && defined(CANE_DIAG)
 	{
@@ -2075,6 +2087,36 @@ static void DrawGlobImpl(RPL* prpl, bool fBakeOnly)
 			BakeGlobSubLighting(pglob, sub);
 		if (g_caneGlErr)
 			while (glGetError() != GL_NO_ERROR) {}
+		{
+			g_caneLastDraw[0] = reinterpret_cast<unsigned long long>(pglob);
+			g_caneLastDraw[1] = pglob->VAO;
+			g_caneLastDraw[2] = pglob->VBO;
+			g_caneLastDraw[3] = pglob->EBO;
+			g_caneLastDraw[4] = pglob->ssboCachedMaterial;
+			g_caneLastDraw[5] = pglob->poseDposSSBO;
+			g_caneLastDraw[6] = static_cast<unsigned long long>(prpl->ro.trlk);
+			g_caneLastDraw[7] = static_cast<unsigned long long>(i);
+			g_caneLastDraw[8] = static_cast<unsigned long long>(static_cast<long long>(sub.baseVertex));
+			g_caneLastDraw[9] = static_cast<unsigned long long>(static_cast<long long>(sub.firstIndex));
+			g_caneLastDraw[10] = static_cast<unsigned long long>(static_cast<long long>(sub.indexCount));
+			g_caneLastDraw[11] = 0;   // (no glGet here: a state query per draw would cost frame time)
+			g_caneLastDraw[12] = reinterpret_cast<unsigned long long>(pglob->PFNDRAW);
+			g_caneLastDraw[13] = static_cast<unsigned long long>(g_cframe);
+			g_caneLastDraw[14] = fBakeOnly ? 1 : 0;
+		}
+		// A draw without its vertex/index buffers would make some drivers copy from a null pointer inside the driver.
+		if (pglob->VAO == 0 || pglob->EBO == 0 || sub.indexCount <= 0)
+		{
+			if (s_badDrawLogged < 20)
+			{
+				++s_badDrawLogged;
+#ifdef __ANDROID__
+				__android_log_print(ANDROID_LOG_WARN, "cane", "[BadDraw] skipped: glob=%p vao=%u ebo=%u vbo=%u indexCount=%d trlk=%d sub=%d",
+					(const void*)pglob, pglob->VAO, pglob->EBO, pglob->VBO, (int)sub.indexCount, (int)prpl->ro.trlk, i);
+#endif
+			}
+			continue;
+		}
 		pglob->PFNDRAW(sub.baseVertex, sub.firstIndex, sub.indexCount);
 		CaneCheckGlError("draw", pglob, (int)prpl->ro.trlk, i);
 	}

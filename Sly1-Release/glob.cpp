@@ -11,6 +11,21 @@
 #include "looker.h"
 #include <unordered_map>
 
+// The baked-lighting cache buffers used to be allocated without data (glBufferData with nullptr) and first written by a
+// transform-feedback bake. Newer Adreno drivers (Snapdragon 8 Gen 2 with Android 16 firmware) crashed inside a draw that read such a
+// buffer in the first frames after a level load, with a null pointer in the driver's own memcpy. Give the storage real contents.
+static void CaneAllocZeroedBuffer(GLenum target, GLsizeiptr size)
+{
+    if (size <= 0)
+    {
+        glBufferData(target, 0, nullptr, GL_STATIC_DRAW);
+        return;
+    }
+    std::vector<unsigned char> zeros(static_cast<size_t>(size), 0);
+    glBufferData(target, size, zeros.data(), GL_STATIC_DRAW);
+}
+
+
 namespace
 {
     struct POSEWEIGHTGPU
@@ -478,7 +493,7 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
 
                         glGenBuffers(1, &glob.ssboCachedMaterial);
                         glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.ssboCachedMaterial);
-                        glBufferData(GL_SHADER_STORAGE_BUFFER, (GLsizeiptr)(totalVerts * sizeof(MATERIAL)), nullptr, GL_STATIC_DRAW);
+                        CaneAllocZeroedBuffer(GL_SHADER_STORAGE_BUFFER, (GLsizeiptr)(totalVerts * sizeof(MATERIAL)));
                         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
                     }
                 }
@@ -690,7 +705,7 @@ void CloneGlob(GLOBSET* pglobset, GLOB* pglob, GLOBI* pglobi)
 
         glGenBuffers(1, &pglob->ssboCachedMaterial);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, pglob->ssboCachedMaterial);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, totalVerts * sizeof(MATERIAL), nullptr, GL_STATIC_DRAW);
+        CaneAllocZeroedBuffer(GL_SHADER_STORAGE_BUFFER, (GLsizeiptr)(totalVerts * sizeof(MATERIAL)));
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
@@ -782,7 +797,7 @@ void CloneGlobset(GLOBSET* pglobset, ALO* palo, GLOBSET* pglobsetBase)
 
             glGenBuffers(1, &glob.ssboCachedMaterial);
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, glob.ssboCachedMaterial);
-            glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(totalVerts * sizeof(MATERIAL)), nullptr, GL_STATIC_DRAW);
+            CaneAllocZeroedBuffer(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(totalVerts * sizeof(MATERIAL)));
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
         }
 

@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <unwind.h>
 
+extern "C" unsigned long long g_caneLastDraw[16];   // render.cpp: the last glob draw issued
+
 namespace
 {
 constexpr int kSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
@@ -57,6 +59,15 @@ void Handler(int sig, siginfo_t* info, void* context)
             sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "SIGABRT",
             info != nullptr ? info->si_code : 0, info != nullptr ? info->si_addr : nullptr, static_cast<int>(gettid()),
             static_cast<int>(getpid()));
+        Emit(fd, line, static_cast<size_t>(n));
+
+        // The last glob draw before the fault (glob, VAO, VBO, EBO, material SSBO, pose SSBO, trlk, sub, baseVertex, firstIndex,
+        // indexCount, program, draw function, frame, bake-only)
+        n = snprintf(line, sizeof(line), "  last draw: glob=%llx vao=%llu vbo=%llu ebo=%llu mat=%llu pose=%llu trlk=%lld sub=%lld base=%lld first=%lld count=%lld prog=%llu fn=%llx frame=%lld bakeonly=%lld\n",
+            g_caneLastDraw[0], g_caneLastDraw[1], g_caneLastDraw[2], g_caneLastDraw[3], g_caneLastDraw[4], g_caneLastDraw[5],
+            static_cast<long long>(g_caneLastDraw[6]), static_cast<long long>(g_caneLastDraw[7]), static_cast<long long>(g_caneLastDraw[8]),
+            static_cast<long long>(g_caneLastDraw[9]), static_cast<long long>(g_caneLastDraw[10]), g_caneLastDraw[11], g_caneLastDraw[12],
+            static_cast<long long>(g_caneLastDraw[13]), static_cast<long long>(g_caneLastDraw[14]));
         Emit(fd, line, static_cast<size_t>(n));
 
         Trace trace;

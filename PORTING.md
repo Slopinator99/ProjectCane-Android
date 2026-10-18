@@ -330,6 +330,26 @@ instead of vertex-stage buffers, `CANE_PORTABLE_SHADERS`), the GLFW-on-SDL shim 
 - **Open questions:** where the UI lives (the Java import/saves screens rather than the in-game menus), rate limiting (one check per day, `ETag`), and what to
   do on devices where installing from the app is blocked (fall back to opening the Releases page in the browser).
 
+## Adreno rendering notes (what Qualcomm's own guidance says, and how it maps to this renderer)
+Source: Qualcomm's Adreno documentation ([overview](https://docs.qualcomm.com/doc/80-78185-2/topic/overview.html), [mobile best practices](https://docs.qualcomm.com/doc/80-78185-2/topic/mobile_best_practices.html),
+[Game Developer Guides](https://developer.qualcomm.com/sites/default/files/docs/adreno-gpu/snapdragon-game-toolkit/gdg/gpu/best_practices.html)). None of it mentions transform feedback, so our bake path is outside the documented happy path.
+- **Buffer updates mid-frame.** "Batch VBO updates before any draw that uses the modified region, otherwise the driver may keep multiple copies of the whole VBO."
+  The transform-feedback bake rewrites a glob's cache buffer between draws, which is exactly this case (the driver renames/copies the buffer). The newer-driver crash
+  (memcpy with a null pointer inside the draw, first frames after a load, relight globs) fits a copy of a buffer that was allocated with `glBufferData(nullptr)` and never
+  written. Fix: allocate the cache zero-filled (`CaneAllocZeroedBuffer` in glob.cpp).
+- **FlexRender direct mode.** Many texture fetches in vertex shaders per vertex, few vertices/draws, or tessellation/geometry shaders push the driver into direct
+  (non-binning) rendering, which is often slower. The portable shader path fetches pose weights, cel borders and baked lighting from data textures in the vertex
+  shader, so this is a likely contributor to the Adreno slowdowns seen earlier. Measure with Snapdragon Profiler before and after trimming vertex-stage fetches.
+- **Storage buffers.** Prefer vertex buffers or uniform buffers; for larger read-only data prefer textures over SSBOs. (Matches why the vertex-SSBO fallback exists.)
+- **Render passes.** Minimise passes, invalidate attachments you do not need (`glInvalidateFramebuffer`, `EXT_discard_framebuffer`, or a `glClear`) so no GMEM loads/stores
+  happen. The bake pre-pass in its own FBO is fine only because nothing has been drawn into the scene pass yet.
+- **Concurrent binning** is blocked by chains of dependent passes and by reusing one depth buffer with clears.
+- **Other:** avoid `glFenceSync`/`glClientWaitSync`; cache linked programs with `glGetProgramBinary`/`glProgramBinary` (fewer first-frame stalls); `KHR_no_error` for shipping
+  builds; Qualcomm itself says Vulkan is usually faster and easier to debug than OpenGL ES on Adreno.
+- **Tools:** Snapdragon Profiler (Snapshot mode steps through a captured frame draw call by draw call; real-time counters), Android GPU Inspector.
+- **Candidate redesigns of the bake** (none done): relight in the vertex shader every draw (`debug.cane.nobake` already does this for A/B), bake with a compute shader,
+  or bake into a float texture read with `texelFetch`. Each removes transform feedback from the frame.
+
 ## High refresh rates (0.4.1-android.2+)
 `glfwGetVideoModes` (platform/android/glfw_sdl.cpp) asks `CaneActivity.supportedRefreshRates()` for the rates the screen supports at its current
 resolution, so the Frame Rate option (`SupportedFrameRates` in prompt.cpp) lists them. When the game's frame-rate target changes, `FramePacer::Wait`
