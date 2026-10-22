@@ -234,6 +234,16 @@ feed `OnFinger`; a lifted finger is kept for one read so a tap between two frame
 has its own offset/size (`place_<name>=dx,dy,scale` in touch_settings.cfg, units of a 1080 px screen height) edited in the layout editor.
 Menu: `RESPK_TouchMode/Opacity/Size/Edit` in the Controls menu (Android only). Verified on the AYN Thor by the user.
 
+## Upstream 0.5.0 merge (2026-10-22)
+Merged upstream Beta 0.5.0 (`f77825d`, three commits after the 0.4.1 base `d8e34ca`) as `3145d57`. What it brings: PAL (SCES-509.17) and Japanese (SCPS-150.36) support, a
+localisation/content layer (`content.cpp`, language entries 79..83 in `resp.h`), the PCBRX v19 unified container (the runtime still reads v17 and PAL v18, so existing NTSC-U data keeps
+working and **no re-import is needed**), widescreen FMV presentation, music fixes (random stops, pause ducking), a camera black-screen trace, and a new `PalExtractor` native tool.
+Conflicts resolved: CMake (rebuilder tools moved to `File Extractor GUI/NativeTools/`; the PAL extractor is a desktop tool and is excluded on Android), `glob.h/.cpp` (upstream now retains the edge
+points for map export; kept together with our fallback data textures), `resp.h` (our Android response IDs renumbered after the language entries, now 84..94), `prompt.cpp`, `sound.cpp`, `transition.cpp`.
+Behaviour changes upstream made that we made switchable (Options > Video, saved in `gui_proportions.cfg`): the PS2 interface now has a fixed 4:3 horizontal stretch (`gui_layout.h`,
+`g_fGuiClassicProportions`) and cutscenes are zoomed to fill (`fmv.cpp`, `g_fCutsceneClassic`). Android defaults to the classic look; desktop keeps upstream's.
+Not done: on-device import of PAL/Japanese discs (the native `PalExtractor` could be ported behind the Java importer, see the shared-C++ plan in the iOS roadmap).
+
 ## Upstream 0.4.1 merge (2026-10-15)
 Merged on top of the port, then re-tested on the Thor and the RG557 (fresh on-device import, intro, Paris and gameplay,
 sound, Back, touch, rumble). What it needed:

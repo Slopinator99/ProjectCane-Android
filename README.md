@@ -9,7 +9,7 @@
 An Android port of [ProjectCane](https://github.com/theclub654/ProjectCane), the native
 PC port of the NTSC release of *Sly Cooper and the Thievius Raccoonus*.
 
-This fork is based on upstream **0.4.1** and adds everything needed to run the game on
+This fork is based on upstream **0.5.0** (beta) and adds everything needed to run the game on
 ARM64 Android phones and handhelds: an OpenGL ES 3.2 renderer path, SDL2-based window,
 audio and input, an on-screen controller, and an importer that extracts the game data
 from your own ISO directly on the device.
@@ -28,7 +28,7 @@ from your own ISO directly on the device.
 | --- | --- | --- |
 | AYN Thor | Qualcomm Snapdragon 8 Gen 2 | Adreno 740 |
 | RG557 | MediaTek | Mali-G615 |
-| POCO F6 Pro (earlier build) | Qualcomm Snapdragon 8 Gen 2 | Adreno 740 |
+| POCO F6 Pro | Qualcomm Snapdragon 8 Gen 2 | Adreno 740 |
 
 The game is fully playable on these. Anything in the same processor families (Snapdragon /
 Adreno, MediaTek / Mali) should normally work too. It has **not** been tested on Samsung
@@ -64,6 +64,9 @@ source (see [Building](#building-the-android-app)).
 - **On-screen controller** in a PlayStation-style layout with an editor for moving and
   resizing every control, plus opacity and size settings. It hides itself when a physical
   pad is used.
+- **Classic look by default.** Upstream 0.5.0 stretches the PS2-style interface horizontally and zooms animated
+  cutscenes to fill the screen. Both are switches in **Options, Video**: *GUI Proportions* (Classic or Retail 4:3)
+  and *Cutscenes* (Whole frame or Zoom to fill). Android defaults to the classic look.
 - **High refresh rates:** the Frame Rate option offers every refresh rate the screen supports (for example 120 Hz) and asks Android to run the screen at it; 60 stays the default.
 - **Back button = Start** (opens and closes the pause menu).
 - **Save backup and restore** from the Options menu: saves are exported as a ZIP to any
@@ -81,8 +84,9 @@ If you previously extracted the data on a PC, choose **Or: copy a folder already
 on a PC** and select the folder that contains `Worlds` and `Cutscenes`.
 
 Game data and saves live in `Android/data/org.projectcane.cane/files/` (reachable over USB).
-Data imported by an older ProjectCane Android version is detected and re-imported once,
-because upstream 0.4.x needs levels in a new format.
+Data imported by ProjectCane Android 0.4.1-android.x keeps working with 0.5.0: no re-import is needed.
+(Data from versions older than that is detected and re-imported once.) PAL and Japanese discs, which
+upstream 0.5.0 supports on desktop, are not supported by the on-device importer yet.
 
 ## Controls
 
