@@ -16,15 +16,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 # Rebuilds retail level files into the PC format: a desktop tool, and a JNI library for the Android importer.
 set(brx_rebuilder_sources
-    Tools/BrxRebuilder/AssetWalker.cpp
-    Tools/BrxRebuilder/BinaryInputStream.cpp
-    Tools/BrxRebuilder/BrxWalker.cpp
-    Tools/BrxRebuilder/GeometryWalker.cpp
-    Tools/BrxRebuilder/main.cpp
-    Tools/BrxRebuilder/ObjectWalker.cpp
-    Tools/BrxRebuilder/OptionWalker.cpp
-    Tools/BrxRebuilder/SpliceWalker.cpp
-    Tools/BrxRebuilder/TriangleList.cpp)
+    "File Extractor GUI/NativeTools/BrxRebuilder/AssetWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/BinaryInputStream.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/BrxWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/GeometryWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/main.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/ObjectWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/OptionWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/SpliceWalker.cpp"
+    "File Extractor GUI/NativeTools/BrxRebuilder/TriangleList.cpp")
 if(NOT ANDROID)
 add_executable(Sly1BrxRebuilder ${brx_rebuilder_sources})
 target_compile_definitions(Sly1BrxRebuilder PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -33,8 +33,23 @@ else()
 set(brx_rebuilder_lib_sources ${brx_rebuilder_sources})
 list(FILTER brx_rebuilder_lib_sources EXCLUDE REGEX "/main[.]cpp$")
 add_library(brxrebuild SHARED ${brx_rebuilder_lib_sources} platform/android/brx_rebuild_jni.cpp)
-target_include_directories(brxrebuild PRIVATE Tools/BrxRebuilder)
+target_include_directories(brxrebuild PRIVATE "File Extractor GUI/NativeTools/BrxRebuilder")
 target_link_libraries(brxrebuild PRIVATE log)
+endif()
+
+set(pal_extractor_sources
+    "File Extractor GUI/NativeTools/PalExtractor/AssetWalker.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/BinaryInputStream.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/BrxWalker.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/GeometryWalker.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/main.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/ObjectWalker.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/OptionWalker.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/PalIsoExtractor.cpp"
+    "File Extractor GUI/NativeTools/PalExtractor/SpliceWalker.cpp")
+if(NOT ANDROID)
+add_executable(Sly1PalExtractor ${pal_extractor_sources})
+target_compile_definitions(Sly1PalExtractor PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 set(CANE_FFMPEG_ROOT "" CACHE PATH "FFmpeg development prefix")
@@ -269,5 +284,5 @@ if(MSVC AND NOT CANE_GLES)
 endif()
 
 if(NOT ANDROID)
-    install(TARGETS ProjectCane Sly1BrxRebuilder RUNTIME DESTINATION bin)
+    install(TARGETS ProjectCane Sly1BrxRebuilder Sly1PalExtractor RUNTIME DESTINATION bin)
 endif()

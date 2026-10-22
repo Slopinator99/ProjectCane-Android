@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <array>
 #include <filesystem>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -19,9 +20,12 @@ struct WalkStats {
     std::uint64_t triangles{};
 };
 
+enum class BrxSourceRegion { Auto, NtscU, Pal, Japanese };
+
 class BrxWalker {
 public:
-    explicit BrxWalker(StringEncoding encoding);
+    explicit BrxWalker(StringEncoding encoding, BrxSourceRegion region = BrxSourceRegion::Auto);
+    void LoadLevelIdentityMap(const std::filesystem::path& path);
     void WalkFile(const std::filesystem::path& path);
     [[nodiscard]] const WalkStats& Stats() const { return stats_; }
     GeometrySummary ReadGeom(CBinaryInputStream& stream);
@@ -37,8 +41,14 @@ public:
     void ConvertLevelDescriptor(CBinaryInputStream& stream);
     void ConvertMusicDescriptor(CBinaryInputStream& stream);
     void ConvertSoundBank(CBinaryInputStream& stream);
+    std::string ReadAndConvertString(CBinaryInputStream& stream);
+    std::string ReadAndConvertUtf16String(CBinaryInputStream& stream);
+    void ConvertLocalizationReference(CBinaryInputStream& stream);
+    [[nodiscard]] bool IsPal() const { return pal_; }
+    [[nodiscard]] bool IsJapanese() const { return region_ == BrxSourceRegion::Japanese; }
 
 private:
+    void WalkFileInternal(const std::filesystem::path& path);
     struct RebuildOperation {
         std::size_t begin{};
         std::size_t end{};
@@ -57,6 +67,10 @@ private:
     std::int16_t lastOptionId_{-1};
     bool haveLastOption_{};
     void LoadSwFromBrx(CBinaryInputStream& stream);
+    void RemoveNameTableFromBrx(CBinaryInputStream& stream, bool debugInfo);
+    bool HasPalLocalizationTable(CBinaryInputStream& stream);
+    void RemovePalLocalizationTable(CBinaryInputStream& stream);
+    void RemoveJapaneseLocalizationTables(CBinaryInputStream& stream);
     void DispatchObject(CBinaryInputStream& stream, std::int16_t cid,
         std::int16_t oid, std::int16_t splice, unsigned depth);
     void LoadLo(CBinaryInputStream& stream);
@@ -67,6 +81,11 @@ private:
     void LoadAlox(CBinaryInputStream& stream);
     void Trace(const char* name, std::size_t begin, std::size_t end) const;
     StringEncoding encoding_;
+    BrxSourceRegion region_;
+    bool pal_{};
+    std::unordered_map<std::uint32_t, std::string> levelIdentityMap_;
+    std::vector<std::string> palLocalizationStrings_;
+    std::vector<std::string> referenceLocalizationStrings_;
     WalkStats stats_{};
     std::vector<RebuildOperation> rebuildOperations_;
     struct SourceClut {

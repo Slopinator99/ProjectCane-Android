@@ -358,6 +358,10 @@ struct GLOB // NOT DONE
 	// buffer is split into three data textures (edgeSSBO = positions) so celborder.vert can fetch them.
 	GLuint edgeBoneIndicesSSBO = 0;
 	GLuint edgeBoneWeightsSSBO = 0;
+	// Retained for map/character export. Four points describe each authored edge:
+	// the two edge endpoints followed by the opposite point from each face.
+	std::vector<CELPOINT> edgePoints;
+	std::vector<glm::vec4> edgePoseDpos;
 	// Ptr to instance model matrix
 	std::shared_ptr <glm::mat4> pdmat;
 	struct BLOT* pblot;

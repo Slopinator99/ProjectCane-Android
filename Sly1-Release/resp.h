@@ -100,6 +100,11 @@ enum RESPK : int
 	RESPK_ControllerDeadzone,
 	RESPK_AudioOutputDevice,
 	RESPK_ResetMappings,
+	RESPK_LanguageEnglish,
+	RESPK_LanguageFrench,
+	RESPK_LanguageGerman,
+	RESPK_LanguageSpanish,
+	RESPK_LanguageItalian,
 
 	RESPK_BackupSaves,   // Android: save backup / restore screen (numbered after upstream's entries)
 	RESPK_TouchMode,     // Android: on-screen controller settings
@@ -111,7 +116,7 @@ enum RESPK : int
 	RESPK_SecondScreen,  // Android: second display on/off (Options menu)
 	RESPK_SecondScreenArt,
 
-	RESPK_Max = 88
+	RESPK_Max = 93
 };
 
 // -----------------------------------------------------------------------------
@@ -162,8 +167,9 @@ enum PRK : int
 	PRK_KeyboardMapping = 35,
 	PRK_ControllerMapping = 36,
 	PRK_SoundMenu = 37,
+	PRK_LanguageMenu = 38,
 
-	PRK_Max = 38
+	PRK_Max = 39
 };
 
 // -----------------------------------------------------------------------------
@@ -295,6 +301,16 @@ inline RESPK s_arespkContinue[1] =
     RESPK_Continue
 };
 
+inline RESPK s_arespkLanguageMenu[6] =
+{
+	RESPK_LanguageEnglish,
+	RESPK_LanguageFrench,
+	RESPK_LanguageGerman,
+	RESPK_LanguageSpanish,
+	RESPK_LanguageItalian,
+	RESPK_Back
+};
+
 inline RESPK s_arespkSlots[7] =
 {
     RESPK_Slot1,
@@ -421,28 +437,28 @@ inline char g_achzRespk16[64]{};
 inline char g_achzRespk24[64]{};
 inline char g_achzRespk25[64]{};
 inline char g_achzRespk26[64]{};
-inline char g_achzRespk27[64]{};
-inline char g_achzRespk28[64]{};
-inline char g_achzRespk30[64]{};
-inline char g_achzRespk31[64]{};
-inline char g_achzRespk32[64]{};
-inline char g_achzRespk33[64]{};
-inline char g_achzRespk34[64]{};
-inline char g_achzRespk35[64]{};
-inline char g_achzRespk40[64]{};
-inline char g_achzRespk41[64]{};
-inline char g_achzRespk60[64]{};
-inline char g_achzRespk61[64]{};
-inline char g_achzRespk63[64]{};
-inline char g_achzRespk64[64]{};
-inline char g_achzRespk65[64]{};
-inline char g_achzRespk66[64]{};
-inline char g_achzRespk67[64]{};
-inline char g_achzRespk68[64]{};
-inline char g_achzRespk69[64]{};
-inline char g_achzRespk70[64]{};
-inline char g_achzRespk71[64]{};
-inline char g_achzRespk72[64]{};
+inline char g_achzRespk27[128]{};
+inline char g_achzRespk28[128]{};
+inline char g_achzRespk30[128]{};
+inline char g_achzRespk31[128]{};
+inline char g_achzRespk32[128]{};
+inline char g_achzRespk33[128]{};
+inline char g_achzRespk34[128]{};
+inline char g_achzRespk35[128]{};
+inline char g_achzRespk40[128]{};
+inline char g_achzRespk41[128]{};
+inline char g_achzRespk60[128]{};
+inline char g_achzRespk61[128]{};
+inline char g_achzRespk63[128]{};
+inline char g_achzRespk64[128]{};
+inline char g_achzRespk65[128]{};
+inline char g_achzRespk66[128]{};
+inline char g_achzRespk67[128]{};
+inline char g_achzRespk68[128]{};
+inline char g_achzRespk69[128]{};
+inline char g_achzRespk70[128]{};
+inline char g_achzRespk71[128]{};
+inline char g_achzRespk72[128]{};
 inline char g_achzRespk73[96]{};
 inline char g_achzRespk74[64]{};
 inline char g_achzRespk75[64]{};
@@ -600,16 +616,21 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	g_achzRespk75,            // 75 RESPK_ResolutionScale
 	g_achzRespk76,            // 76 RESPK_ControllerDeadzone
 	g_achzRespk77,            // 77 RESPK_AudioOutputDevice
-	"Reset Mappings",         // 78 RESPK_ResetMappings
-	"Backup / Restore Saves...", // 79 RESPK_BackupSaves
-	g_achzRespkTouchMode,     // 80 RESPK_TouchMode
-	g_achzRespkTouchOpacity,  // 81 RESPK_TouchOpacity
-	g_achzRespkTouchSize,     // 82 RESPK_TouchSize
-	"Edit Touch Layout...",   // 83 RESPK_TouchEdit
-	"Save State (experimental)", // 84 RESPK_SaveState
-	"Load State (experimental)", // 85
-	g_achzRespkSecondScreen,     // 86 RESPK_SecondScreen
-	g_achzRespkSecondScreenArt   // 87 RESPK_SecondScreenArt RESPK_LoadState
+	"Reset Mappings",       // 78 RESPK_ResetMappings
+	"English",              // 79 RESPK_LanguageEnglish
+	"Fran\xC3\xA7""ais",    // 80 RESPK_LanguageFrench
+	"Deutsch",              // 81 RESPK_LanguageGerman
+	"Espa\xC3\xB1""ol",    // 82 RESPK_LanguageSpanish
+	"Italiano",             // 83 RESPK_LanguageItalian
+	"Backup / Restore Saves...", // 84 RESPK_BackupSaves
+	g_achzRespkTouchMode,     // 85 RESPK_TouchMode
+	g_achzRespkTouchOpacity,  // 86 RESPK_TouchOpacity
+	g_achzRespkTouchSize,     // 87 RESPK_TouchSize
+	"Edit Touch Layout...",   // 88 RESPK_TouchEdit
+	"Save State (experimental)", // 89 RESPK_SaveState
+	"Load State (experimental)", // 90 RESPK_LoadState
+	g_achzRespkSecondScreen,     // 91 RESPK_SecondScreen
+	g_achzRespkSecondScreenArt   // 92 RESPK_SecondScreenArt
 };
 
 // -----------------------------------------------------------------------------
@@ -676,21 +697,23 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr },           // 70 RESPK_AnisotropicFiltering
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
-	{ 0, nullptr },           // 79 RESPK_BackupSaves
-	{ 0, nullptr },           // 80 RESPK_TouchMode
-	{ 0, nullptr },           // 81 RESPK_TouchOpacity
-	{ 0, nullptr },           // 82 RESPK_TouchSize
-	{ 0, nullptr },           // 83 RESPK_TouchEdit
-	{ 0, nullptr },           // 84 RESPK_SaveState
-	{ 0, nullptr },           // 85 RESPK_LoadState
-	{ 0, nullptr },           // 86 RESPK_SecondScreen
-	{ 0, nullptr }            // 87 RESPK_SecondScreenArt
+	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
+	{ 0, nullptr },           // 79..83 language entries
+	{ 0, nullptr },           // 84 RESPK_BackupSaves
+	{ 0, nullptr },           // 85 RESPK_TouchMode
+	{ 0, nullptr },           // 86 RESPK_TouchOpacity
+	{ 0, nullptr },           // 87 RESPK_TouchSize
+	{ 0, nullptr },           // 88 RESPK_TouchEdit
+	{ 0, nullptr },           // 89 RESPK_SaveState
+	{ 0, nullptr },           // 90 RESPK_LoadState
+	{ 0, nullptr },           // 91 RESPK_SecondScreen
+	{ 0, nullptr }            // 92 RESPK_SecondScreenArt
 };
 
 // -----------------------------------------------------------------------------
 // Prompt descriptor table
 //
-// There must be exactly one entry for every numeric PRK from 0 through 32.
+// There must be exactly one entry for every numeric PRK.
 // -----------------------------------------------------------------------------
 
 inline PRD s_mpprkprd[PRK_Max] =
@@ -732,7 +755,8 @@ inline PRD s_mpprkprd[PRK_Max] =
 	{ "Are you sure?", 1.0f, 1.0f, 0, 2, s_arespkYesNo },                                     // 34 PRK_ExitToDesktopConfirm
 	{ "Keyboard Mapping", 0.8f, 0.55f, 1, static_cast<int>(std::size(s_arespkKeyboardMapping)), s_arespkKeyboardMapping }, // 35
 	{ "Controller Mapping", 0.8f, 0.55f, 1, static_cast<int>(std::size(s_arespkKeyboardMapping)), s_arespkKeyboardMapping }, // 36
-	{ "Sound", 1.0f, 0.8f, 1, static_cast<int>(std::size(s_arespkSoundMenu)), s_arespkSoundMenu } // 37
+	{ "Sound", 1.0f, 0.8f, 1, static_cast<int>(std::size(s_arespkSoundMenu)), s_arespkSoundMenu }, // 37
+	{ "Language...", 1.0f, 1.0f, 1, static_cast<int>(std::size(s_arespkLanguageMenu)), s_arespkLanguageMenu } // 38
 };
 
 static_assert(sizeof(s_mpprkprd) / sizeof(s_mpprkprd[0]) == PRK_Max);
