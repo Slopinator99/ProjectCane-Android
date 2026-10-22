@@ -6,6 +6,9 @@
 #include "game.h"
 #include "debug.h"
 #include "runtime_error.h"
+#include "../platform/platform.h"
+#include <fstream>
+#include <string>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -1635,6 +1638,36 @@ int g_textureFiltering = 1;
 float g_outputGamma = 1.0f;
 float g_guiScale = 1.0f;
 GuiStyle g_guiStyle = GuiStyle_PS2;
+// Upstream 0.5.0 renders the PS2-style interface with the retail 4:3 horizontal stretch; earlier versions used a uniform scale. Both are
+// available: Android defaults to the classic look it always had, desktop to upstream's. Stored beside the other settings.
+#ifdef __ANDROID__
+bool g_fGuiClassicProportions = true;
+#else
+bool g_fGuiClassicProportions = false;
+#endif
+
+#ifdef __ANDROID__
+bool g_fCutsceneClassic = true;
+#else
+bool g_fCutsceneClassic = false;
+#endif
+
+void LoadGuiProportions()
+{
+	std::ifstream in(cane::UserDirectory() / "gui_proportions.cfg");
+	std::string value;
+	if (in && std::getline(in, value))
+		g_fGuiClassicProportions = value.find("classic") != std::string::npos;
+	if (in && std::getline(in, value))
+		g_fCutsceneClassic = value.find("classic") != std::string::npos;
+}
+
+void SaveGuiProportions()
+{
+	std::ofstream out(cane::UserDirectory() / "gui_proportions.cfg", std::ios::trunc);
+	if (out)
+		out << (g_fGuiClassicProportions ? "classic" : "retail") << '\n' << (g_fCutsceneClassic ? "classic" : "zoom") << '\n';
+}
 WindowMode g_windowMode = WindowMode_Windowed;
 bool g_fAutoIconify = false;
 float g_drawDistanceMultiplier = 1.0f;

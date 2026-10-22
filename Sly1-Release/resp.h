@@ -115,8 +115,10 @@ enum RESPK : int
 	RESPK_LoadState,
 	RESPK_SecondScreen,  // Android: second display on/off (Options menu)
 	RESPK_SecondScreenArt,
+	RESPK_GuiProportions, // PS2 interface proportions: classic (uniform) or retail (4:3 horizontal stretch)
+	RESPK_CutsceneDisplay, // animated cutscenes: whole frame (classic) or zoomed to fill (0.5.0)
 
-	RESPK_Max = 93
+	RESPK_Max = 95
 };
 
 // -----------------------------------------------------------------------------
@@ -412,6 +414,8 @@ inline const RESPK s_arespkVideoMenuAll[] =
     RESPK_AspectRatio,
     RESPK_Fog,
     RESPK_GuiStyle,
+    RESPK_GuiProportions,
+    RESPK_CutsceneDisplay,
     RESPK_GuiScale,
 	RESPK_ResetVideo,
     RESPK_Back
@@ -466,6 +470,8 @@ inline char g_achzRespk76[64]{};
 inline char g_achzRespk77[128]{};
 inline char g_achzRespkSecondScreen[64]{};
 inline char g_achzRespkSecondScreenArt[96]{};
+inline char g_achzRespkGuiProportions[96]{};
+inline char g_achzRespkCutsceneDisplay[96]{};
 inline char g_achzRespkTouchMode[64]{};
 inline char g_achzRespkTouchOpacity[64]{};
 inline char g_achzRespkTouchSize[64]{};
@@ -630,7 +636,9 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	"Save State (experimental)", // 89 RESPK_SaveState
 	"Load State (experimental)", // 90 RESPK_LoadState
 	g_achzRespkSecondScreen,     // 91 RESPK_SecondScreen
-	g_achzRespkSecondScreenArt   // 92 RESPK_SecondScreenArt
+	g_achzRespkSecondScreenArt,  // 92 RESPK_SecondScreenArt
+	g_achzRespkGuiProportions,   // 93 RESPK_GuiProportions
+	g_achzRespkCutsceneDisplay   // 94 RESPK_CutsceneDisplay
 };
 
 // -----------------------------------------------------------------------------
@@ -707,7 +715,9 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr },           // 89 RESPK_SaveState
 	{ 0, nullptr },           // 90 RESPK_LoadState
 	{ 0, nullptr },           // 91 RESPK_SecondScreen
-	{ 0, nullptr }            // 92 RESPK_SecondScreenArt
+	{ 0, nullptr },           // 92 RESPK_SecondScreenArt
+	{ 0, nullptr },           // 93 RESPK_GuiProportions
+	{ 0, nullptr }            // 94 RESPK_CutsceneDisplay
 };
 
 // -----------------------------------------------------------------------------

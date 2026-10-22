@@ -347,7 +347,7 @@ namespace
         return false;
     }
 
-    bool PresentCutsceneFrame(GLuint texture, float videoAspect)
+    bool PresentCutsceneFrame(GLuint texture, float videoAspect, float codedAspect)
     {
         int framebufferWidth = 0;
         int framebufferHeight = 0;
@@ -364,7 +364,21 @@ namespace
         int y = 0;
         const bool preserveFourByThree =
             g_gl.aspectMode == Fixed_4_3 || g_gl.aspectMode == PS2_4_3;
-        if (preserveFourByThree && windowAspect > videoAspect)
+        if (g_fCutsceneClassic && codedAspect > 0.0f && std::isfinite(codedAspect))
+        {
+            // Classic presentation (before 0.5.0): the whole coded frame, black bars where the window is a different shape.
+            if (windowAspect > codedAspect)
+            {
+                width = static_cast<int>(framebufferHeight * codedAspect);
+                x = (framebufferWidth - width) / 2;
+            }
+            else
+            {
+                height = static_cast<int>(framebufferWidth / codedAspect);
+                y = (framebufferHeight - height) / 2;
+            }
+        }
+        else if (preserveFourByThree && windowAspect > videoAspect)
         {
             width = static_cast<int>(framebufferHeight * videoAspect);
             x = (framebufferWidth - width) / 2;
@@ -695,7 +709,8 @@ namespace
                     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, decoder->width, decoder->height,
                         GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-                    PresentCutsceneFrame(texture, displayAspect);
+                    PresentCutsceneFrame(texture, displayAspect,
+                        static_cast<float>(decoder->width) / static_cast<float>(decoder->height));
                     glfwPollEvents();
                     g_joy.Update(g_gl.window);
                     ServiceAudioDevice();

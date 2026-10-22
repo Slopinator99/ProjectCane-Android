@@ -1053,6 +1053,8 @@ void SetPromptPrk(PROMPT* pprompt)
 #endif
     std::snprintf(g_achzRespk40, sizeof(g_achzRespk40), "%s: %d%%", PcText("GUI Scale", "Échelle de l'interface", "UI-Skalierung", "Escala de interfaz", "Scala interfaccia"),
         static_cast<int>(std::lround(g_guiScale * 100.0f)));
+    std::snprintf(g_achzRespkCutsceneDisplay, sizeof(g_achzRespkCutsceneDisplay), "Cutscenes: %s", g_fCutsceneClassic ? "Whole frame" : "Zoom to fill");
+    std::snprintf(g_achzRespkGuiProportions, sizeof(g_achzRespkGuiProportions), "GUI Proportions: %s", g_fGuiClassicProportions ? "Classic" : "Retail 4:3");
     std::snprintf(g_achzRespk60, sizeof(g_achzRespk60), "%s: %s", PcText("GUI Style", "Style d'interface", "UI-Stil", "Estilo de interfaz", "Stile interfaccia"),
         g_guiStyle == GuiStyle_Modern ? PcText("Modern", "Moderne", "Modern", "Moderno", "Moderno") : "PS2");
 	std::snprintf(g_achzRespk61, sizeof(g_achzRespk61), "%s: %s",
@@ -1479,6 +1481,18 @@ void ExecutePrompt(PROMPT* pprompt, int direction)
             case RESPK_GuiScale:
             SelectGuiScale(direction);
             SaveSystemSettings();
+            rebuildPromptKeepingSelection();
+            return;
+
+            case RESPK_CutsceneDisplay:
+            g_fCutsceneClassic = !g_fCutsceneClassic;
+            SaveGuiProportions();
+            rebuildPromptKeepingSelection();
+            return;
+
+            case RESPK_GuiProportions:
+            g_fGuiClassicProportions = !g_fGuiClassicProportions;
+            SaveGuiProportions();
             rebuildPromptKeepingSelection();
             return;
 

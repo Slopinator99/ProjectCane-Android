@@ -900,6 +900,7 @@ int RunApplication(const std::vector<std::string>& arguments)
     {
 		cane::ConfigureRuntime(arguments);
         RefreshContentPackage(cane::DataDirectory());
+        LoadGuiProportions();
         Startup();
 		#ifdef _WIN32
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);

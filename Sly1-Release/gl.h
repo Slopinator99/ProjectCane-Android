@@ -265,6 +265,10 @@ extern int g_textureFiltering;
 extern float g_outputGamma;
 extern float g_guiScale;
 extern GuiStyle g_guiStyle;
+extern bool g_fGuiClassicProportions;   // PS2 interface: classic uniform scale (true) or the retail 4:3 horizontal stretch (false)
+void LoadGuiProportions();
+void SaveGuiProportions();
+extern bool g_fCutsceneClassic;   // animated cutscenes: whole frame with bars (true, as before 0.5.0) or zoomed to fill the window (false)
 extern WindowMode g_windowMode;
 extern bool g_fAutoIconify;
 extern float g_drawDistanceMultiplier;

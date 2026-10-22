@@ -11,6 +11,14 @@ struct GuiScale
 
 inline GuiScale GetGuiScale(float scaleSetting)
 {
+    if (g_guiStyle == GuiStyle_PS2 && g_fGuiClassicProportions)
+    {
+        // Classic proportions (all versions before 0.5.0): one uniform scale from the window height.
+        constexpr float kPs2CanvasHeight = 492.80002f;
+        const float uniformScale = (g_gl.height / kPs2CanvasHeight) * scaleSetting;
+        return { uniformScale, uniformScale };
+    }
+
     if (g_guiStyle == GuiStyle_PS2)
     {
         // Keep the PS2 canvas uniformly fitted when the presentation aspect
